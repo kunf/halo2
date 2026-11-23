@@ -78,6 +78,12 @@ try:
         benq_halo2.feed_watchdog()
         asyncio.run(main())
 
+        # Send updates queued by HA commands and poll until the lamp applies them.
+        # Each call does at most one short RF exchange, so MQTT keeps running in between.
+        benq_halo2.process_updates()
+        if benq_halo2.is_syncing():
+            continue
+
         # Sniff messages from remote control
         if benq_halo2.sniff_mode():
             update_mqtt_entities()

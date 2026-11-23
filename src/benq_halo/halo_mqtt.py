@@ -239,17 +239,26 @@ class HaMqttBasicLight(HaMqttEntity):
         self.output_topics["{}/availability".format(self.base_topic)] = self.availability
         self.is_updated = True
 
-    def set(self, payload):
-        try:
-            self.current_state['state'] = payload['state']
-            if self.current_state['state'] == "ON":
-                self.light.on()
-            else:
-                self.light.off()
+    # Fields of the HA JSON command that are passed on to the lamp; extended by subclasses
+    command_fields = ('state',)
 
-            self.is_updated = True
-        except KeyError:
-            pass
+    def set(self, payload):
+        '''
+        Pass all supported fields of one HA command to the lamp at once, so that e.g.
+        {"state": "ON", "brightness": 50, "color_temp": 4000} becomes a single lamp update
+        '''
+        args = {}
+        for field in self.command_fields:
+            if field in payload:
+                args[field] = payload[field]
+        if not args:
+            return
+        applied = self.light.set(**args)
+        if 'state' in args:
+            self.current_state['state'] = args['state']
+        # brightness / color_temp as actually applied after clamping
+        self.current_state.update(applied)
+        self.is_updated = True
 
     def state(self):
         return self.current_state
@@ -267,18 +276,8 @@ class HaMqttBrightnessLight(HaMqttBasicLight):
         self.current_state['brightness'] = dim_status
         self.is_updated = True
 
-    def set_brightness(self, value):
-        # The lamp clamps the value to its valid range and returns what was applied
-        self.current_state['brightness'] = self.light.brightness(value)
-        self.is_updated = True
+    command_fields = ('state', 'brightness')
 
-    def set(self, payload):
-        super().set(payload)
-        try:
-            self.set_brightness(payload['brightness'])
-        except KeyError:
-            pass
-    
     def update(self, pow_status, dim_status, availability):
         new_availability_state = 'offline' if availability == False else 'online'
         new_brightness = dim_status
@@ -306,17 +305,7 @@ class HaMqttBrightnessLightWithColorTemp(HaMqttBrightnessLight):
         self.current_state['color_temp'] = color_temp
         self.is_updated = True
 
-    def set_color_temp(self, value):
-        # The lamp clamps the value to its valid range and returns what was applied
-        self.current_state['color_temp'] = self.light.color_temp(value)
-        self.is_updated = True
-
-    def set(self, payload):
-        super().set(payload)
-        try:
-            self.set_color_temp(payload['color_temp'])
-        except KeyError:
-            pass
+    command_fields = ('state', 'brightness', 'color_temp')
 
     def update(self, pow_status, dim_status, color_temp, availability):
         super().update(pow_status, dim_status, availability)

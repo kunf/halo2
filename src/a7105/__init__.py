@@ -63,6 +63,7 @@ STROBE_FIFO_W_RST = 0xE0  # Write Pointer Reset for TX FIFO
 STROBE_FIFO_R_RST = 0xF0  # Read Pointer Reset for RX FIFO
 
 BUF_SIZE = 36
+RX_QUEUE_LEN = 8 # Max received buffers kept; the oldest is dropped when full
 
 class a7105:
     def __init__(self, spi_num = getattr(config, 'SPI_NUM', None),
@@ -75,7 +76,8 @@ class a7105:
                        debug = getattr(config, 'DEBUG', None)):
 
         self._debug = False if debug is None else debug
-        self.rx_ptks = []
+        self.rx_ptks = []       # Received buffers, oldest first (filled by the GIO2 interrupt)
+        self._ack_buffer = None # ACK captured by the last send_with_ack()
         self.sniffer_fifo = []
         self.pid = benq_halo.utils.create_cycling_pid()
         platform = sys.platform
@@ -146,43 +148,66 @@ class a7105:
         if id_code != bytes(HALO2_ADDRESS[::-1]):
             print(f"Warning: A7105 ID code read back as {id_code.hex()}")
 
-    def calibrate(self):
+    def wait_calibration(self, mask, timeout_ms=10):
+        """Wait until the calibration enable bit(s) in REG_CALC auto-clear (calibration done)"""
+        start_time = time.ticks_ms()
+        while self.read_reg(REG_CALC) & mask:
+            if time.ticks_diff(time.ticks_ms(), start_time) > timeout_ms:
+                return False
+            time.sleep_us(10)
+        return True
+
+    def calibrate_once(self):
         print("Starting IF Filter Bank Calibration...")
 
-        if_cal = self.read_reg(REG_IF_CAL) & 0b11101111 # MFBS = 0
+        if_cal = self.read_reg(REG_IF_CAL) & 0b11101111 # MFBS = 0 (auto)
         self.write_reg(REG_IF_CAL, if_cal)
         self.write_strobe(STROBE_PLL)
 
         cal_reg = self.read_reg(REG_CALC) | 0b00000001 # FBC = 1
         self.write_reg(REG_CALC, cal_reg)
-        time.sleep_us(256)
+        done = self.wait_calibration(0b00000001)
 
         if_cal = self.read_reg(REG_IF_CAL)
-        cal_flag = if_cal & 0b00010000 # FBCF
+        cal_flag = if_cal & 0b00010000 # FBCF, 1 = failed
         cal_value = if_cal & 0b00001111 # FB
-        print(f"cal_flag: {cal_flag}, cal_value: {cal_value}")
-        
+        print(f"done: {done}, cal_flag: {cal_flag}, cal_value: {cal_value}")
+        if_ok = done and not cal_flag
+
         print("Starting VCO Current Calibration...")
 
         self.write_reg(REG_VCO_CUR_CAL, 0x13)
 
         print("Starting VCO Bank Calibration...")
 
-        if_cal = self.read_reg(REG_SBCAL1) & 0b11110111 # MVBS = 0
-        self.write_reg(REG_IF_CAL, if_cal)
+        vco_cal = self.read_reg(REG_SBCAL1) & 0b11110111 # MVBS = 0 (auto)
+        self.write_reg(REG_SBCAL1, vco_cal)
         self.write_strobe(STROBE_PLL)
 
         cal_reg = self.read_reg(REG_CALC) | 0b00000010 # VBC = 1
         self.write_reg(REG_CALC, cal_reg)
-        time.sleep_us(240)
+        done = self.wait_calibration(0b00000010)
 
-        if_cal = self.read_reg(REG_SBCAL1)
-        cal_flag = if_cal & 0b00001000 # VBCF
-        cal_value = if_cal & 0b00000111 # VB
-        print(f"cal_flag: {cal_flag}, cal_value: {cal_value}")
+        vco_cal = self.read_reg(REG_SBCAL1)
+        cal_flag = vco_cal & 0b00001000 # VBCF, 1 = failed
+        cal_value = vco_cal & 0b00000111 # VB
+        print(f"done: {done}, cal_flag: {cal_flag}, cal_value: {cal_value}")
+        vco_ok = done and not cal_flag
+
+        return if_ok and vco_ok
+
+    def calibrate(self, attempts=3):
+        for _ in range(attempts):
+            if self.calibrate_once():
+                return True
+            print("A7105 calibration failed, retrying...")
+        print("Warning: A7105 calibration failed, RF performance may be degraded")
+        return False
 
     def packet_received(self, pin):
         self.write_strobe(STROBE_FIFO_R_RST)
+        if len(self.rx_ptks) >= RX_QUEUE_LEN:
+            self.rx_ptks.pop(0) # Drop the oldest buffer, so the queue can't grow without bound
         self.rx_ptks.append(self.read_fifo(BUF_SIZE))
         self.write_strobe(STROBE_RX)
 
@@ -286,37 +311,36 @@ class a7105:
         self.listen()
 
     def receive_packet(self):
-        if self.rx_ptks:
-            pkt_buffer = self.rx_ptks.pop()
-            if len(pkt_buffer) > 14:
-                (packet1, packet2) = benq_halo.utils.parse_raw_packet(pkt_buffer, split=True)
-                if packet1 and packet1["crc_valid"] and (packet1["no_ack"] == 1):
-                    return packet1["payload"]
-                elif packet2 and packet2["crc_valid"] and (packet2["no_ack"] == 1):
-                    return packet2["payload"]
-            else:
-                packet = benq_halo.utils.parse_raw_packet(pkt_buffer)
-                if packet["crc_valid"]:
-                    return packet["payload"]
+        """
+        Return the ACK payload captured by the last send_with_ack(). The ACK is kept apart
+        from rx_ptks, so it can't be confused with queued remote control packets.
+        """
+        pkt_buffer = self._ack_buffer
+        self._ack_buffer = None
+        if pkt_buffer:
+            packet = benq_halo.utils.parse_raw_packet(pkt_buffer)
+            if packet["crc_valid"]:
+                return packet["payload"]
         return None
 
     def find_address(self):
         if self.rx_ptks:
-            return benq_halo.utils.extract_address(self.rx_ptks.pop())
+            return benq_halo.utils.extract_address(self.rx_ptks.pop(0))
 
     def sniffer_get_packet(self):
         if self.sniffer_fifo:
             return self.sniffer_fifo.pop()
         if self.rx_ptks:
-            (packet1, packet2) = benq_halo.utils.parse_raw_packet(self.rx_ptks.pop(), split=True)
+            (packet1, packet2) = benq_halo.utils.parse_raw_packet(self.rx_ptks.pop(0), split=True)
             self.sniffer_fifo.append(packet2)
             return packet1
         else:
             return None
 
     def receive_without_ack(self):
+        # Oldest first, so a burst from the remote control is applied in the order it was sent
         if self.rx_ptks:
-            pkt_buffer = self.rx_ptks.pop()
+            pkt_buffer = self.rx_ptks.pop(0)
             if len(pkt_buffer) > 14:
                 (packet1, packet2) = benq_halo.utils.parse_raw_packet(pkt_buffer, split=True)
                 if packet1 and packet1["crc_valid"] and (packet1["no_ack"] == 1):
@@ -358,7 +382,7 @@ class a7105:
                 break
             time.sleep_us(10)
 
-        self.rx_ptks.append(self.read_fifo(14))
+        self._ack_buffer = self.read_fifo(14)
         self.write_reg(REG_FIFO1, BUF_SIZE)
         self.gpio2.irq(trigger=Pin.IRQ_FALLING, handler=self.packet_received)
         self.write_strobe(STROBE_RX)
