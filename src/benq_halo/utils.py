@@ -96,7 +96,11 @@ def create_cycling_pid():
             yield i
 
 def compile_packet(pid, payload):
-    pcf = 0x50 | (pid << 2)
+    # The 9-bit PCF goes on air as a 0 bit (inserted by shift_right below) followed by this byte:
+    #   0 + bit 7..3: 6-bit payload length (10 -> 0x50)
+    #   bit 2..1: PID, bit 0: NO_ACK
+    # This matches how parse_one_packet() decodes it.
+    pcf = 0x50 | ((pid & 0x03) << 1)
     pkt_buffer = bytearray([pcf]) + bytearray(payload) + bytearray([0x00])
     shift_right(pkt_buffer)
     crc = crc16(bytearray(HALO2_ADDRESS[::-1]) + pkt_buffer)
