@@ -82,8 +82,10 @@ def parse_raw_packet(payload, split=False):
     # Split buffer to two packets
     packet1 = parse_one_packet(payload[:14])
     packet2 = None
-    packet2_start_position = payload[14:].find(bytearray(HALO2_ADDRESS[::-1])) + 18
-    if packet2_start_position:
+    address_position = payload[14:].find(bytearray(HALO2_ADDRESS[::-1]))
+    if address_position != -1:
+        # Second packet starts after the 4-byte address that follows the first packet
+        packet2_start_position = address_position + 14 + 4
         if (packet2_start_position + 14) <= len(payload):
             packet2 = parse_one_packet(payload[packet2_start_position:packet2_start_position + 14])
     return packet1, packet2
@@ -94,7 +96,11 @@ def create_cycling_pid():
             yield i
 
 def compile_packet(pid, payload):
-    pcf = 0x50 | (pid << 2)
+    # The 9-bit PCF goes on air as a 0 bit (inserted by shift_right below) followed by this byte:
+    #   0 + bit 7..3: 6-bit payload length (10 -> 0x50)
+    #   bit 2..1: PID, bit 0: NO_ACK
+    # This matches how parse_one_packet() decodes it.
+    pcf = 0x50 | ((pid & 0x03) << 1)
     pkt_buffer = bytearray([pcf]) + bytearray(payload) + bytearray([0x00])
     shift_right(pkt_buffer)
     crc = crc16(bytearray(HALO2_ADDRESS[::-1]) + pkt_buffer)
@@ -107,12 +113,11 @@ def extract_address(payload):
     if (not payload) or (payload == bytearray(b"\x00" * len(payload))):
         return None
     shift_right(payload)
-    preamble_position = payload[4:10].find(bytearray([0xAA])) + 4
-    if (not preamble_position) or (preamble_position + 5) > len(payload):
-        preamble_position = payload[4:10].find(bytearray([0x55])) + 4
-    if (not preamble_position) or (preamble_position + 5) > len(payload):
-        return None
-    if (payload[preamble_position + 5] & 0b11111100) != 0x28:
-        return None
-
-    return payload[preamble_position + 1: preamble_position + 5]
+    # The preamble is 0xAA or 0x55 depending on the first address bit. It is followed by
+    # the 4-byte address and the PCF, whose first 6 bits (payload length 10) give 0x28.
+    for preamble in (0xAA, 0x55):
+        for preamble_position in range(4, min(10, len(payload) - 5)):
+            if (payload[preamble_position] == preamble) and \
+               ((payload[preamble_position + 5] & 0b11111100) == 0x28):
+                return payload[preamble_position + 1: preamble_position + 5]
+    return None

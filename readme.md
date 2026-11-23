@@ -17,6 +17,7 @@ as well as ideas from [hatank](https://github.com/rguillon/hatank) by Renaud Gui
 * Connect transceiver to the MCU according to the connection diagram / pinout (see below). Remember to connect GND and +3.3V
 * Install MicroPython to your MCU: [Raspberry Pi Pico W](https://www.raspberrypi.com/documentation/microcontrollers/micropython.html) or [ESP32-WROOM Devkit](https://micropython.org/download/ESP32_GENERIC/).
 * Clone the repository and edit transceiver type, WiFi and MQTT credentials in [config.py](src/config.py) file.
+  * A hardware watchdog resets the MCU if it hangs. It can't be stopped once started, so stopping `main.py` from the IDE (e.g. to upload files) reboots the board after ~8 seconds. Set `WATCHDOG_TIMEOUT_MS = 0` in `config.py` while developing.
 * Copy the contents of `src` folder to the root folder of the MCU using PyCharm with [MicroPython](https://plugins.jetbrains.com/plugin/9777-micropython) plugin or other IDE/tool.
 * Restart MCU.
 * Use the Halo 2 remote controller to set the back lamp brightness to 10% and the color temperature to 3925 K. This is required to acquire the lamp's communication address. The address will be saved to the `halo2_address.py` file. If you want to use the integration device with another lamp that has a different communication address, simply delete this file, restart MCU and repeat this step.

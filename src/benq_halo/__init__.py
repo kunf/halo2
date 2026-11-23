@@ -3,6 +3,12 @@ import config
 
 HALO2_PKT_END = [0x01, 0x02]
 
+SYNC_POLL_INTERVAL_MS = 500  # Interval between status polls while the lamp applies an update
+SYNC_MAX_POLLS = 5           # Give up waiting for the lamp to report the requested state after this
+
+def clamp(value, min_value, max_value):
+    return max(min_value, min(max_value, int(round(value))))
+
 class benq_halo():
     def __init__(self):
         self._debug = config.DEBUG
@@ -12,6 +18,16 @@ class benq_halo():
         import_file = __import__(module_name, None, None, [module_name])
         driver_class = getattr(import_file, module_name)
         self._rf_module = driver_class()
+
+        # Optional machine.WDT, fed from the main loop
+        self.watchdog = None
+
+        # Queued lamp update (see request_update / process_updates)
+        self._pending_command = None
+        self._pending_auto = False
+        self._sync_payload = None
+        self._sync_polls = 0
+        self._last_sync_poll = 0
 
         self.ultrasonic_sensor_status = True
         self.front_lamp_status = True
@@ -36,6 +52,10 @@ class benq_halo():
                 f"Front lamp brightness: {self.front_lamp_brightness}\n" \
                 f"Back lamp brightness: {self.back_lamp_brightness}\n" \
                 f"Front lamp color temp: {self.front_lamp_color_temp}"
+
+    def feed_watchdog(self):
+        if self.watchdog:
+            self.watchdog.feed()
 
     def print_hex(self, data, title):
         print(f"{title}: ", end="")
@@ -106,6 +126,9 @@ class benq_halo():
         return self.get_lamp_status()
 
     def sniff_mode(self):
+        # Don't let remote control packets overwrite a state we are still sending to the lamp
+        if self.is_syncing():
+            return False
         rcvd_packet = self._rf_module.receive_without_ack()
         if rcvd_packet and (rcvd_packet["no_ack"] == 1):
             self.parse_lamp_status(rcvd_packet["payload"])
@@ -126,32 +149,72 @@ class benq_halo():
         }
         return lamp_status
 
-    def update_lamp_status(self, command=0x03, auto=False):
+    def build_payload(self, auto=False):
         """
-        Update lamp with our internal state
+        Build the 9 payload bytes (everything after the command byte) from our internal state
         """
-        self._rf_module._tx_mode = True
-        # Prepare packet payload and send it
         (control, color_temp_byte1, color_temp_byte2) = self.prepare_payload()
         if auto:
             control = control | 0b00000010
-        pkt_payload = [ control, self.front_lamp_brightness, color_temp_byte1, color_temp_byte2, 
-                             self.back_lamp_brightness, color_temp_byte1, color_temp_byte2] + HALO2_PKT_END
-        self._rf_module.send_with_ack([command] + pkt_payload)
+        return [ control, self.front_lamp_brightness, color_temp_byte1, color_temp_byte2,
+                 self.back_lamp_brightness, color_temp_byte1, color_temp_byte2 ] + HALO2_PKT_END
 
-        # wait for status sync
-        for _ in range(5):
-            self._rf_module.send_with_ack([0x04] + pkt_payload)
+    def request_update(self, command=0x03, auto=False):
+        """
+        Queue an update of the lamp with our internal state. It is sent by process_updates()
+        from the main loop, so MQTT callbacks never block on RF. Several requests made before
+        the update is sent are merged into one RF transaction; 0x02 (on/off) takes precedence.
+        """
+        if self._pending_command != 0x02:
+            self._pending_command = command
+        self._pending_auto = self._pending_auto or auto
+
+    def is_syncing(self):
+        """
+        True while an update is queued or we are waiting for the lamp to apply it
+        """
+        return (self._pending_command is not None) or (self._sync_polls > 0)
+
+    def process_updates(self):
+        """
+        Non-blocking replacement for the old update loop, call it from the main loop:
+        sends a queued update, then polls the lamp every SYNC_POLL_INTERVAL_MS until it reports
+        the requested state or SYNC_MAX_POLLS is reached. Each call does at most one RF exchange.
+        """
+        try:
+            if self._pending_command is not None:
+                command = self._pending_command
+                self._sync_payload = self.build_payload(self._pending_auto)
+                self._pending_command = None
+                self._pending_auto = False
+                self._rf_module._tx_mode = True
+                self._rf_module.send_with_ack([command] + self._sync_payload)
+                self._sync_polls = SYNC_MAX_POLLS
+                # First status poll on the next call, like the old loop polled right away
+                self._last_sync_poll = time.ticks_add(time.ticks_ms(), -SYNC_POLL_INTERVAL_MS)
+                return
+
+            if self._sync_polls <= 0:
+                return
+            if time.ticks_diff(time.ticks_ms(), self._last_sync_poll) < SYNC_POLL_INTERVAL_MS:
+                return
+
+            self._sync_polls -= 1
+            self._last_sync_poll = time.ticks_ms()
+            self._rf_module.send_with_ack([0x04] + self._sync_payload)
             ack_data_raw = self._rf_module.receive_packet()
             if ack_data_raw:
                 ack_data = bytearray(ack_data_raw)
                 if self._debug:
                     self.print_hex(ack_data, "Rcvt")
-                if bytearray(pkt_payload) == ack_data[1:]:
-                    break
-            time.sleep_ms(500)
-
-        self._rf_module._tx_mode = False
+                if bytearray(self._sync_payload) == ack_data[1:]:
+                    self._sync_polls = 0
+        except Exception:
+            self._sync_polls = 0
+            raise
+        finally:
+            # Re-enable sniffing (BC5602) once the sync is over, even after an error
+            self._rf_module._tx_mode = self.is_syncing()
 
 class OnOff:
     """
@@ -164,13 +227,13 @@ class OnOff:
 
     def on(self):
         self._benq_halo.onoff_status = True
-        self._benq_halo.update_lamp_status(command=0x02)
+        self._benq_halo.request_update(command=0x02)
         if self._benq_halo._debug:
             print("onoff_status True")
 
     def off(self):
         self._benq_halo.onoff_status = False
-        self._benq_halo.update_lamp_status(command=0x02)
+        self._benq_halo.request_update(command=0x02)
         if self._benq_halo._debug:
             print("onoff_status False")
 
@@ -185,93 +248,89 @@ class UltrasonicSensor:
 
     def on(self):
         self._benq_halo.ultrasonic_sensor_status = True
-        self._benq_halo.update_lamp_status()
+        self._benq_halo.request_update()
         if self._benq_halo._debug:
             print("ultrasonic_sensor_status True")
 
     def off(self):
         self._benq_halo.ultrasonic_sensor_status = False
-        self._benq_halo.update_lamp_status()
+        self._benq_halo.request_update()
         if self._benq_halo._debug:
             print("ultrasonic_sensor_status False")
 
-class BackLamp:
+class _Lamp:
+    """
+    Common logic for the front and back lamps. Subclasses set the attribute names below.
+    """
+    _status_attr = None      # e.g. "front_lamp_status"
+    _other_status_attr = None
+    _brightness_attr = None
+    _name = None
+
+    def __init__(self, benq_halo):
+        self._benq_halo = benq_halo
+        if self._benq_halo._debug:
+            print(f"{self._name} init")
+
+    def set(self, state=None, brightness=None, color_temp=None):
+        """
+        Apply on/off state, brightness (percent, HA uses brightness_scale 100) and color
+        temperature (Kelvin) from one HA command as a single lamp update.
+        Returns the brightness/color_temp values actually applied after clamping.
+        """
+        halo = self._benq_halo
+        command = None
+        applied = {}
+
+        if state == "ON":
+            if halo.onoff_status and not getattr(halo, self._status_attr):
+                setattr(halo, self._status_attr, True)
+                command = 0x03
+        elif state == "OFF":
+            if halo.onoff_status:
+                if getattr(halo, self._other_status_attr):
+                    setattr(halo, self._status_attr, False)
+                    command = 0x03
+                else:
+                    # Turning off the last lit lamp powers off the whole lamp
+                    halo.onoff_status = False
+                    command = 0x02
+
+        if brightness is not None:
+            value = clamp(brightness, getattr(halo, self._brightness_attr + "_min"), getattr(halo, self._brightness_attr + "_max"))
+            setattr(halo, self._brightness_attr, value)
+            applied['brightness'] = value
+            command = command or 0x03
+
+        if color_temp is not None:
+            value = clamp(color_temp, halo.front_lamp_color_temp_min, halo.front_lamp_color_temp_max)
+            halo.front_lamp_color_temp = value
+            applied['color_temp'] = value
+            command = command or 0x03
+
+        if command is not None:
+            halo.request_update(command=command)
+        if halo._debug:
+            print(f"{self._name} set state={state} {applied} -> command {command}")
+        return applied
+
+class BackLamp(_Lamp):
     """
     Back lamp class
     """
-    def __init__(self, benq_halo):
-        self._benq_halo = benq_halo
-        if self._benq_halo._debug:
-            print("BackLamp init")
+    _status_attr = "back_lamp_status"
+    _other_status_attr = "front_lamp_status"
+    _brightness_attr = "back_lamp_brightness"
+    _name = "BackLamp"
 
-    def on(self):
-        if self._benq_halo.onoff_status and not self._benq_halo.back_lamp_status:
-            self._benq_halo.back_lamp_status = True
-            self._benq_halo.update_lamp_status()
-            if self._benq_halo._debug:
-                print("back_lamp_status True")
-
-    def off(self):
-        if self._benq_halo.onoff_status:
-            if self._benq_halo.front_lamp_status:
-                self._benq_halo.back_lamp_status = False
-                self._benq_halo.update_lamp_status()
-                if self._benq_halo._debug:
-                    print("back_lamp_status False")
-            else:
-                self._benq_halo.onoff_status = False
-                self._benq_halo.update_lamp_status(command=0x02)
-                if self._benq_halo._debug:
-                    print("onoff_status False")
-
-    def brightness(self, value):
-        value_percent = round((value / 256) * 100)
-        self._benq_halo.back_lamp_brightness = value_percent
-        self._benq_halo.update_lamp_status()
-        if self._benq_halo._debug:
-            print(f"back_lamp_brightness {value} -> {value_percent}%")
-
-class FrontLamp:
+class FrontLamp(_Lamp):
     """
     Front lamp class
     """
-    def __init__(self, benq_halo):
-        self._benq_halo = benq_halo
-        if self._benq_halo._debug:
-            print("FrontLamp init")
-
-    def on(self):
-        if self._benq_halo.onoff_status and not self._benq_halo.front_lamp_status:
-            self._benq_halo.front_lamp_status = True
-            self._benq_halo.update_lamp_status()
-            if self._benq_halo._debug:
-                print("front_lamp_status True")
-
-    def off(self):
-        if self._benq_halo.onoff_status:
-            if self._benq_halo.back_lamp_status:
-                self._benq_halo.front_lamp_status = False
-                self._benq_halo.update_lamp_status()
-                if self._benq_halo._debug:
-                    print("front_lamp_status False")
-            else:
-                self._benq_halo.onoff_status = False
-                self._benq_halo.update_lamp_status(command=0x02)
-                if self._benq_halo._debug:
-                    print("onoff_status False")
-
-    def brightness(self, value):
-        value_percent = round((value / 256) * 100)
-        self._benq_halo.front_lamp_brightness = value_percent
-        self._benq_halo.update_lamp_status()
-        if self._benq_halo._debug:
-            print(f"front_lamp_brightness {value} -> {value_percent}%")
-
-    def color_temp(self, value):
-        self._benq_halo.front_lamp_color_temp = value
-        self._benq_halo.update_lamp_status()
-        if self._benq_halo._debug:
-            print(f"front_lamp_color_temp {value}")
+    _status_attr = "front_lamp_status"
+    _other_status_attr = "back_lamp_status"
+    _brightness_attr = "front_lamp_brightness"
+    _name = "FrontLamp"
 
 class AutoConfig:
     """
@@ -283,7 +342,6 @@ class AutoConfig:
             print("AutoConfig init")
 
     def start_auto(self):
-        self._benq_halo.update_lamp_status(auto=True)
+        self._benq_halo.request_update(auto=True)
         if self._benq_halo._debug:
             print("start_auto")
-

@@ -22,6 +22,13 @@ HOME_ASSISTANT_PREFIX = "homeassistant"
 RF_TRANSCEIVER = 'bc5602'
 
 #
+# Hardware watchdog timeout in ms (max 8388 on Raspberry Pi Pico), 0 disables it.
+# NB! The watchdog can't be stopped once started: interrupting main.py (e.g. to upload
+# files from the IDE) reboots the board after this timeout. Set to 0 while developing.
+#
+WATCHDOG_TIMEOUT_MS = 8000
+
+#
 # Custome GPIO pins
 #
 #-------------------------------------

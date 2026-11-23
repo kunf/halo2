@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# Generated on the MCU by address discovery
+src/halo2_address.py

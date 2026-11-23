@@ -1,5 +1,6 @@
 import sys
 import json
+import machine
 import config as my_config
 from machine import Pin
 from mqtt_as import MQTTClient, config
@@ -53,12 +54,24 @@ async def conn_han(client):
     for entity in mqtt_entities:
         await entity.on_connect()
 
+MQTT_CONNECT_RETRY_S = 10       # Delay between initial connection attempts
+MQTT_CONNECT_MAX_ATTEMPTS = 12  # Reset the MCU after this many failed attempts
+
 async def main(client):
-    try:
-        await client.connect()
-    except OSError:
-        print('Connection failed.')
-        return
+    # mqtt_as only reconnects automatically after the first successful connect(),
+    # so keep retrying the initial connection instead of giving up.
+    attempt = 0
+    while True:
+        try:
+            await client.connect()
+            break
+        except OSError as e:
+            attempt += 1
+            print('MQTT connection failed ({}), attempt {}/{}'.format(e, attempt, MQTT_CONNECT_MAX_ATTEMPTS))
+            if attempt >= MQTT_CONNECT_MAX_ATTEMPTS:
+                print('Giving up, resetting MCU.')
+                machine.reset()
+            await asyncio.sleep(MQTT_CONNECT_RETRY_S)
     while True:
         await asyncio.sleep(5)
 
@@ -149,11 +162,17 @@ class HaMqttEntity(object):
         :param message:
         '''
         try:
-            payload = json.loads(message.decode('utf-8'))
-            self.input_topics[topic.decode('utf-8')](payload)
-            self.is_updated = True
+            callback = self.input_topics[topic.decode('utf-8')]
         except KeyError:
-            pass
+            return  # Not our topic
+        # Never let an exception escape into mqtt_as: it would silently kill the
+        # task that receives messages, leaving the device connected but deaf.
+        try:
+            payload = json.loads(message.decode('utf-8'))
+            callback(payload)
+            self.is_updated = True
+        except Exception as e:
+            print("Error handling message on {}: {!r}".format(topic, e))
 
 class HaMqttSwitch(HaMqttEntity):
 
@@ -220,17 +239,26 @@ class HaMqttBasicLight(HaMqttEntity):
         self.output_topics["{}/availability".format(self.base_topic)] = self.availability
         self.is_updated = True
 
-    def set(self, payload):
-        try:
-            self.current_state['state'] = payload['state']
-            if self.current_state['state'] == "ON":
-                self.light.on()
-            else:
-                self.light.off()
+    # Fields of the HA JSON command that are passed on to the lamp; extended by subclasses
+    command_fields = ('state',)
 
-            self.is_updated = True
-        except KeyError:
-            pass
+    def set(self, payload):
+        '''
+        Pass all supported fields of one HA command to the lamp at once, so that e.g.
+        {"state": "ON", "brightness": 50, "color_temp": 4000} becomes a single lamp update
+        '''
+        args = {}
+        for field in self.command_fields:
+            if field in payload:
+                args[field] = payload[field]
+        if not args:
+            return
+        applied = self.light.set(**args)
+        if 'state' in args:
+            self.current_state['state'] = args['state']
+        # brightness / color_temp as actually applied after clamping
+        self.current_state.update(applied)
+        self.is_updated = True
 
     def state(self):
         return self.current_state
@@ -243,24 +271,16 @@ class HaMqttBrightnessLight(HaMqttBasicLight):
     def __init__(self, name, full_name, light, pow_status, dim_status, availability):
         super().__init__(name=name, full_name=full_name, light=light, pow_status=pow_status, availability=availability)
         self.discover_conf["brightness"] = True
-        self.current_state['brightness'] = (dim_status / 100) * 256
+        # The lamp works in percent (1-100), so let HA use the same scale
+        self.discover_conf["brightness_scale"] = 100
+        self.current_state['brightness'] = dim_status
         self.is_updated = True
 
-    def set_brightness(self, value):
-        self.current_state['brightness'] = value
-        self.light.brightness(value)
-        self.is_updated = True
+    command_fields = ('state', 'brightness')
 
-    def set(self, payload):
-        super().set(payload)
-        try:
-            self.set_brightness(payload['brightness'])
-        except KeyError:
-            pass
-    
     def update(self, pow_status, dim_status, availability):
         new_availability_state = 'offline' if availability == False else 'online'
-        new_brightness = (dim_status / 100) * 256
+        new_brightness = dim_status
         new_state = "OFF" if pow_status == False else "ON"
         if (self.availability_state != new_availability_state) or \
            (self.current_state['brightness'] != new_brightness) or \
@@ -276,24 +296,16 @@ class HaMqttBrightnessLightWithColorTemp(HaMqttBrightnessLight):
     def __init__(self, name, full_name, light, pow_status, dim_status, color_temp, availability):
         super().__init__(name=name, full_name=full_name, light=light, pow_status=pow_status, dim_status=dim_status, availability=availability)
         self.discover_conf["color_temp_kelvin"] = True
-        self.discover_conf["color_mode"] = 'color_temp'
         self.discover_conf["supported_color_modes"] = ["color_temp"]
         self.discover_conf["min_kelvin"] = 2700
         self.discover_conf["max_kelvin"] = 6500
+        # HA's JSON schema only parses color_temp from a state message when
+        # color_mode is present in it
+        self.current_state['color_mode'] = 'color_temp'
         self.current_state['color_temp'] = color_temp
         self.is_updated = True
 
-    def set_color_temp(self, value):
-        self.current_state['color_temp'] = value
-        self.light.color_temp(value)
-        self.is_updated = True
-
-    def set(self, payload):
-        super().set(payload)
-        try:
-            self.set_color_temp(payload['color_temp'])
-        except KeyError:
-            pass
+    command_fields = ('state', 'brightness', 'color_temp')
 
     def update(self, pow_status, dim_status, color_temp, availability):
         super().update(pow_status, dim_status, availability)

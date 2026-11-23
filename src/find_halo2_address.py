@@ -1,3 +1,4 @@
+import os
 import time
 import config
 
@@ -43,5 +44,12 @@ for item in addresses:
 
 most_frequent = max(counts, key=counts.get)
 
-with open("/halo2_address.py", "w") as f:
-    f.write(most_frequent)
+# Write to a temporary file first, so that an interrupted write can't leave a corrupt halo2_address.py
+with open("/halo2_address.tmp", "w") as f:
+    f.write(most_frequent + "\n")
+try:
+    os.remove("/halo2_address.py")  # Not every filesystem lets rename() overwrite
+except OSError:
+    pass
+os.rename("/halo2_address.tmp", "/halo2_address.py")
+print("Saved:", most_frequent)

@@ -100,6 +100,7 @@ class lr1121:
         self.spi = SPI(self._spi_num, baudrate=baudrate, polarity=0, phase=0, sck=self._sck, mosi=self._mosi, miso=self._miso)
 
         self.reset()
+        self.check_chip()
 
         self.write_cmd(CMD_SET_STANDBY, [0x00])
         self.write_cmd(CMD_SET_REG_MODE, [0x01])
@@ -145,9 +146,21 @@ class lr1121:
         ]
         self.write_cmd(CMD_SET_PKT_PARAMS, pkt_params)
 
-    def wait_busy(self):
+    def wait_busy(self, timeout_ms=1000):
+        start_time = time.ticks_ms()
         while self.busy.value() == 1:
+            if time.ticks_diff(time.ticks_ms(), start_time) > timeout_ms:
+                raise RuntimeError("LR1121 BUSY timeout: transceiver not responding")
             time.sleep_us(10)
+
+    def check_chip(self):
+        """
+        Detect a missing or miswired transceiver from the GetVersion response
+        """
+        version = bytes(self.read_cmd(CMD_GET_VERSION, 5))[1:]
+        if (version == b"\x00" * 4) or (version == b"\xff" * 4):
+            raise RuntimeError("Transceiver LR1121 not found!")
+        print(f"Chip version: {version.hex()}")
 
     def write_cmd(self, opcode, params=None):
         self.wait_busy()
@@ -252,7 +265,9 @@ class lr1121:
                 elif packet2 and packet2["crc_valid"] and (packet2["no_ack"] == 1):
                     return packet2["payload"]
             else:
-                return benq_halo.utils.parse_raw_packet(pkt_buffer)["payload"]
+                packet = benq_halo.utils.parse_raw_packet(pkt_buffer)
+                if packet["crc_valid"]:
+                    return packet["payload"]
         return None
 
     def receive_raw_packet(self):
