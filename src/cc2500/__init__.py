@@ -121,6 +121,13 @@ class cc2500:
         self.send_strobe(SRES)
         time.sleep_ms(10)
 
+        # Check if CC2500 is connected
+        partnum = self.read_reg(0x30, is_status=True)
+        version = self.read_reg(0x31, is_status=True)
+        if (version == 0x00) or (version == 0xFF):
+            raise RuntimeError("Transceiver CC2500 not found!")
+        print(f"Chip part number: {partnum:02X}, version: {version:02X}")
+
         # 1. Frequency Configuration: 2405 MHz
         self.write_reg(FREQ2, 0x5C)
         self.write_reg(FREQ1, 0x80)
@@ -275,7 +282,9 @@ class cc2500:
                 elif packet2 and packet2["crc_valid"] and (packet2["no_ack"] == 1):
                     return packet2["payload"]
             else:
-                return benq_halo.utils.parse_raw_packet(pkt_buffer)["payload"]
+                packet = benq_halo.utils.parse_raw_packet(pkt_buffer)
+                if packet["crc_valid"]:
+                    return packet["payload"]
         return None
 
     def receive_raw_packet(self):

@@ -1,15 +1,31 @@
+import os
 import time
+import machine
 import config
-import benq_halo.utils
 
 while True:
     try:
         from halo2_address import HALO2_ADDRESS
         if (isinstance(HALO2_ADDRESS, list)) and (len(HALO2_ADDRESS) == 4) and all(isinstance(x, int) for x in HALO2_ADDRESS):
              break
+        print("Invalid HALO2_ADDRESS in halo2_address.py, repeating address discovery.")
     except ImportError:
-        print("No HALO2_ADDRESS: set brightness 10% and color temperature to 3925K on remote control.")
-        exec(open("/find_halo2_address.py").read())
+        print("No HALO2_ADDRESS found, starting address discovery.")
+    except Exception as e:
+        print("Corrupt halo2_address.py ({!r}), repeating address discovery.".format(e))
+    # Remove a broken file (if any) so that discovery starts from scratch
+    try:
+        os.remove("/halo2_address.py")
+    except OSError:
+        pass
+    print("Set brightness 10% and color temperature to 3925K on remote control.")
+    exec(open("/find_halo2_address.py").read())
+    # The RF driver and benq_halo.utils are already imported with the default
+    # address at this point, so a reset is needed to load the new one.
+    print("Address saved, resetting MCU. Run sniffer.py again afterwards.")
+    machine.reset()
+
+import benq_halo.utils
 
 
 module_name = config.RF_TRANSCEIVER

@@ -3,6 +3,9 @@ import config
 
 HALO2_PKT_END = [0x01, 0x02]
 
+def clamp(value, min_value, max_value):
+    return max(min_value, min(max_value, int(round(value))))
+
 class benq_halo():
     def __init__(self):
         self._debug = config.DEBUG
@@ -12,6 +15,9 @@ class benq_halo():
         import_file = __import__(module_name, None, None, [module_name])
         driver_class = getattr(import_file, module_name)
         self._rf_module = driver_class()
+
+        # Optional machine.WDT, fed during long blocking RF operations
+        self.watchdog = None
 
         self.ultrasonic_sensor_status = True
         self.front_lamp_status = True
@@ -36,6 +42,10 @@ class benq_halo():
                 f"Front lamp brightness: {self.front_lamp_brightness}\n" \
                 f"Back lamp brightness: {self.back_lamp_brightness}\n" \
                 f"Front lamp color temp: {self.front_lamp_color_temp}"
+
+    def feed_watchdog(self):
+        if self.watchdog:
+            self.watchdog.feed()
 
     def print_hex(self, data, title):
         print(f"{title}: ", end="")
@@ -141,6 +151,7 @@ class benq_halo():
 
         # wait for status sync
         for _ in range(5):
+            self.feed_watchdog()
             self._rf_module.send_with_ack([0x04] + pkt_payload)
             ack_data_raw = self._rf_module.receive_packet()
             if ack_data_raw:
@@ -225,11 +236,16 @@ class BackLamp:
                     print("onoff_status False")
 
     def brightness(self, value):
-        value_percent = round((value / 256) * 100)
+        """
+        Set brightness in percent; HA is configured with brightness_scale 100.
+        Returns the value actually applied after clamping to the lamp's range.
+        """
+        value_percent = clamp(value, self._benq_halo.back_lamp_brightness_min, self._benq_halo.back_lamp_brightness_max)
         self._benq_halo.back_lamp_brightness = value_percent
         self._benq_halo.update_lamp_status()
         if self._benq_halo._debug:
             print(f"back_lamp_brightness {value} -> {value_percent}%")
+        return value_percent
 
 class FrontLamp:
     """
@@ -261,17 +277,28 @@ class FrontLamp:
                     print("onoff_status False")
 
     def brightness(self, value):
-        value_percent = round((value / 256) * 100)
+        """
+        Set brightness in percent; HA is configured with brightness_scale 100.
+        Returns the value actually applied after clamping to the lamp's range.
+        """
+        value_percent = clamp(value, self._benq_halo.front_lamp_brightness_min, self._benq_halo.front_lamp_brightness_max)
         self._benq_halo.front_lamp_brightness = value_percent
         self._benq_halo.update_lamp_status()
         if self._benq_halo._debug:
             print(f"front_lamp_brightness {value} -> {value_percent}%")
+        return value_percent
 
     def color_temp(self, value):
+        """
+        Set color temperature in Kelvin.
+        Returns the value actually applied after clamping to the lamp's range.
+        """
+        value = clamp(value, self._benq_halo.front_lamp_color_temp_min, self._benq_halo.front_lamp_color_temp_max)
         self._benq_halo.front_lamp_color_temp = value
         self._benq_halo.update_lamp_status()
         if self._benq_halo._debug:
             print(f"front_lamp_color_temp {value}")
+        return value
 
 class AutoConfig:
     """

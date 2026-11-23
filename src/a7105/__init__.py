@@ -126,6 +126,7 @@ class a7105:
         self.write_reg(REG_CODE1, 0x04) # 1 byte preamble and 4 bytes ID code
         self.write_reg(REG_CODE2, 0x10) # preamble detection -> 0 bits, ID code error tolerance -> 0
         self.write_reg(REG_ID_DATA, HALO2_ADDRESS[::-1]) # ID code / address
+        self.check_chip()
         self.write_reg(REG_GPIO2, 0x01) # WTR
         self.write_reg(REG_RX_DEM, 0x27) # DCM to minimum
   
@@ -134,6 +135,16 @@ class a7105:
 
         if self._debug:
             self.dump_registers()
+
+    def check_chip(self):
+        """
+        Read back the ID code to detect a missing or miswired transceiver
+        """
+        id_code = bytes(self.read_multi_reg(REG_ID_DATA, 4))
+        if (id_code == b"\x00" * 4) or (id_code == b"\xff" * 4):
+            raise RuntimeError("Transceiver A7105 not found!")
+        if id_code != bytes(HALO2_ADDRESS[::-1]):
+            print(f"Warning: A7105 ID code read back as {id_code.hex()}")
 
     def calibrate(self):
         print("Starting IF Filter Bank Calibration...")
@@ -284,7 +295,9 @@ class a7105:
                 elif packet2 and packet2["crc_valid"] and (packet2["no_ack"] == 1):
                     return packet2["payload"]
             else:
-                return benq_halo.utils.parse_raw_packet(pkt_buffer)["payload"]
+                packet = benq_halo.utils.parse_raw_packet(pkt_buffer)
+                if packet["crc_valid"]:
+                    return packet["payload"]
         return None
 
     def find_address(self):
@@ -324,9 +337,13 @@ class a7105:
         srx = bytes([STROBE_RX]) # Caching RX strobe; below is a delay-critical part
         self.write_strobe(STROBE_TX)
 
-        # Wait for packet send
+        # Wait for packet send. Bounded by a cheap counter (not a ticks call)
+        # to keep latency low, so a hung transceiver can't block forever
+        n = 0
         while self.gpio2.value():
-            pass
+            n += 1
+            if n > 200000:
+                break
         self.cs.value(0)
         self.spi.write(srx)
         self.cs.value(1)
