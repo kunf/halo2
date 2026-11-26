@@ -152,6 +152,83 @@ void LR1121Radio::set_packet_length_(uint8_t len) {
 }
 
 bool LR1121Radio::init(const Address &sync_word) {
+  this->sync_word_ = sync_word;
+  if (this->tcxo_voltage_code_ != TCXO_AUTO) {
+    if (!this->configure_(sync_word, this->tcxo_voltage_code_))
+      return false;
+    this->tx_check_ok_ = this->tx_check_();
+    return !this->failed_;
+  }
+  // Try TCXO voltages from 3.0 V (the MicroPython driver's value) down, then a plain
+  // crystal, and keep the first one whose oscillator survives a test transmission.
+  static const uint8_t CANDIDATES[] = {6, 5, 4, 3, 2, 1, 0, TCXO_NONE};
+  for (uint8_t code : CANDIDATES) {
+    if (!this->configure_(sync_word, code)) {
+      if (!this->chip_found_)
+        return false;
+      // The chip answered but got stuck with this clock setting: try the next one
+      ESP_LOGD(TAG, "Clock candidate %u: %s", code, this->failure_);
+      this->failed_ = false;
+      continue;
+    }
+    this->tx_check_ok_ = this->tx_check_();
+    ESP_LOGD(TAG, "Clock candidate %u: clock check 0x%04X, TX check %s (errors 0x%04X)", code,
+             this->clock_check_errors_, this->tx_check_ok_ ? "OK" : "FAILED", this->tx_check_errors_);
+    if (this->tx_check_ok_) {
+      this->auto_selected_ = true;
+      return true;
+    }
+  }
+  // Nothing worked: fall back to 3.0 V so RX keeps working as before
+  this->failed_ = false;
+  if (!this->configure_(sync_word, 6))
+    return false;
+  this->tx_check_ok_ = this->tx_check_();
+  return !this->failed_;
+}
+
+bool LR1121Radio::reinit() {
+  this->reinit_count_++;
+  return this->configure_(this->sync_word_, this->active_tcxo_code_);
+}
+
+// Send one packet to a dummy address (the lamp ignores it) and check that the transmission
+// completes without stopping the 32 MHz oscillator.
+bool LR1121Radio::tx_check_() {
+  static const Address DUMMY{0xC3, 0x5A, 0xA5, 0x3C};
+  const RawPacket junk{};
+  this->write_cmd_({HI(CMD_SET_STANDBY), LO(CMD_SET_STANDBY), STDBY_XOSC});
+  this->set_packet_length_(PACKET_LEN);
+  this->write_sync_word_(DUMMY);
+  this->write_cmd_({HI(CMD_AUTO_TX_RX), LO(CMD_AUTO_TX_RX), 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00});
+  this->write_cmd_({HI(CMD_CLEAR_IRQ), LO(CMD_CLEAR_IRQ), 0xFF, 0xFF, 0xFF, 0xFF});
+  this->write_cmd_({HI(CMD_CLEAR_ERRORS), LO(CMD_CLEAR_ERRORS)});
+  this->write_cmd_(CMD_WRITE_BUFFER, junk.data(), junk.size());
+  this->write_cmd_({HI(CMD_SET_TX), LO(CMD_SET_TX), 0x00, 0x00, 0x00});
+  uint32_t irq = 0;
+  const uint32_t start = millis();
+  while (millis() - start < 50) {
+    irq = this->read_irq_();
+    if (irq & IRQ_TX_DONE)
+      break;
+    delay(1);
+  }
+  this->tx_check_errors_ = this->read_errors_();
+  const bool ok = (irq & IRQ_TX_DONE) && !(this->tx_check_errors_ & ERR_HF_XOSC_START);
+  this->write_cmd_({HI(CMD_CLEAR_ERRORS), LO(CMD_CLEAR_ERRORS)});
+  this->write_cmd_({HI(CMD_CLEAR_IRQ), LO(CMD_CLEAR_IRQ), 0xFF, 0xFF, 0xFF, 0xFF});
+  if (!ok) {
+    // The oscillator may be stopped now; start from scratch with the real address
+    this->configure_(this->sync_word_, this->active_tcxo_code_);
+    return false;
+  }
+  this->write_cmd_({HI(CMD_SET_STANDBY), LO(CMD_SET_STANDBY), STDBY_XOSC});
+  this->write_sync_word_(this->sync_word_);
+  this->listen();
+  return true;
+}
+
+bool LR1121Radio::configure_(const Address &sync_word, uint8_t tcxo_code) {
   this->failed_ = false;
   this->failure_[0] = '\0';
   this->last_cmd_ = 0;
@@ -176,6 +253,7 @@ bool LR1121Radio::init(const Address &sync_word) {
     all_zero &= (b == 0x00);
     all_ff &= (b == 0xFF);
   }
+  this->chip_found_ = !(all_zero || all_ff);
   if (all_zero || all_ff) {
     snprintf(this->failure_, sizeof(this->failure_), "LR1121 not found (version %02X %02X %02X %02X), check wiring",
              version_[0], version_[1], version_[2], version_[3]);
@@ -188,8 +266,9 @@ bool LR1121Radio::init(const Address &sync_word) {
   this->write_cmd_({HI(CMD_SET_REG_MODE), LO(CMD_SET_REG_MODE), 0x01});
   this->write_cmd_({HI(CMD_SET_DIO_AS_RF_SWITCH), LO(CMD_SET_DIO_AS_RF_SWITCH), 0x03, 0x01, 0x01, 0x01, 0x01, 0x01,
                     0x00, 0x00});
-  if (this->tcxo_voltage_code_ <= 7) {
-    this->write_cmd_({HI(CMD_SET_TCXO_MODE), LO(CMD_SET_TCXO_MODE), this->tcxo_voltage_code_,
+  this->active_tcxo_code_ = tcxo_code;
+  if (tcxo_code <= 7) {
+    this->write_cmd_({HI(CMD_SET_TCXO_MODE), LO(CMD_SET_TCXO_MODE), tcxo_code,
                       static_cast<uint8_t>(TCXO_TIMEOUT >> 16), static_cast<uint8_t>(TCXO_TIMEOUT >> 8),
                       static_cast<uint8_t>(TCXO_TIMEOUT)});
   }
@@ -223,8 +302,6 @@ bool LR1121Radio::init(const Address &sync_word) {
   this->write_cmd_({HI(CMD_SET_FS), LO(CMD_SET_FS)});
   delay(5);
   this->clock_check_errors_ = this->read_errors_();
-  if (this->clock_check_errors_ & ERR_HF_XOSC_START)
-    ESP_LOGE(TAG, "32 MHz oscillator did not start; check tcxo_voltage");
   this->write_cmd_({HI(CMD_CLEAR_ERRORS), LO(CMD_CLEAR_ERRORS)});
   this->listen();
   return !this->failed_;
@@ -236,6 +313,7 @@ void LR1121Radio::write_sync_word_(const Address &sync_word) {
 }
 
 void LR1121Radio::set_sync_word(const Address &sync_word) {
+  this->sync_word_ = sync_word;
   this->write_cmd_({HI(CMD_SET_STANDBY), LO(CMD_SET_STANDBY), STDBY_XOSC});
   this->write_sync_word_(sync_word);
   this->listen();
@@ -336,6 +414,11 @@ bool LR1121Radio::transact(const Address &address, const RawPacket &packet, Pack
              "No reply from lamp (TX %s, IRQ 0x%08" PRIX32 ", errors 0x%04X, %" PRIu32 "/%" PRIu32
              " transmissions completed)",
              (irq & IRQ_TX_DONE) ? "done" : "NOT done", irq, errors, this->tx_done_count_, this->tx_count_);
+    if (errors & ERR_HF_XOSC_START) {
+      ESP_LOGW(TAG, "32 MHz oscillator stopped during transmission, re-initializing the radio");
+      this->reinit();
+      return false;
+    }
     if (errors != 0)
       this->write_cmd_({HI(CMD_CLEAR_ERRORS), LO(CMD_CLEAR_ERRORS)});
     this->listen();

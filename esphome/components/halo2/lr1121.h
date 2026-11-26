@@ -25,9 +25,20 @@ class LR1121Radio {
   void set_reset_pin(GPIOPin *pin) { this->reset_pin_ = pin; }
   void set_busy_pin(GPIOPin *pin) { this->busy_pin_ = pin; }
   void set_irq_pin(GPIOPin *pin) { this->irq_pin_ = pin; }
-  /// SetTcxoMode voltage code (0: 1.6 V ... 6: 3.0 V, 7: 3.3 V), or 0xFF for a crystal.
+  static constexpr uint8_t TCXO_AUTO = 0xFE;
+  static constexpr uint8_t TCXO_NONE = 0xFF;
+  /// SetTcxoMode voltage code (0: 1.6 V ... 6: 3.0 V, 7: 3.3 V), TCXO_NONE for a crystal,
+  /// or TCXO_AUTO to pick the first voltage whose oscillator survives a test transmission.
   void set_tcxo_voltage_code(uint8_t code) { this->tcxo_voltage_code_ = code; }
   uint8_t tcxo_voltage_code() const { return this->tcxo_voltage_code_; }
+  /// Clock setting in use (resolved from TCXO_AUTO).
+  uint8_t active_tcxo_code() const { return this->active_tcxo_code_; }
+  bool auto_selected() const { return this->auto_selected_; }
+  bool tx_check_ok() const { return this->tx_check_ok_; }
+  uint16_t tx_check_errors() const { return this->tx_check_errors_; }
+  uint32_t reinit_count() const { return this->reinit_count_; }
+  /// Reset and reconfigure the chip with the clock setting in use.
+  bool reinit();
   /// GetErrors after the start-up clock check (0 = clock OK).
   uint16_t clock_check_errors() const { return this->clock_check_errors_; }
 
@@ -70,6 +81,8 @@ class LR1121Radio {
   void write_cmd_(uint16_t opcode, const uint8_t *params, size_t len);
   bool read_cmd_(std::initializer_list<uint8_t> opcode_and_params, uint8_t *out, size_t len);
   void set_packet_length_(uint8_t len);
+  bool configure_(const Address &sync_word, uint8_t tcxo_code);
+  bool tx_check_();
   void check_stat1_(uint8_t stat1);
   void begin_cmd_(const uint8_t *data, size_t len);
   uint16_t read_errors_();
@@ -87,7 +100,14 @@ class LR1121Radio {
   uint16_t last_cmd_{0};
   uint16_t errors_{0};
   uint16_t clock_check_errors_{0};
-  uint8_t tcxo_voltage_code_{6};  // 3.0 V, as the MicroPython driver
+  uint8_t tcxo_voltage_code_{TCXO_AUTO};
+  uint8_t active_tcxo_code_{6};
+  bool auto_selected_{false};
+  bool chip_found_{false};
+  bool tx_check_ok_{false};
+  uint16_t tx_check_errors_{0};
+  uint32_t reinit_count_{0};
+  Address sync_word_{};
   uint32_t tx_count_{0};
   uint32_t tx_done_count_{0};
   uint32_t reply_count_{0};

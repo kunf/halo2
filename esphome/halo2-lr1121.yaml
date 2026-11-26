@@ -65,9 +65,9 @@ halo2:
   # An address from the MicroPython version's halo2_address.py works as is:
   # address: [0x4e, 0xf5, 0x5d, 0x43]
   # poll_interval: 5s
-  # Supply voltage of the module's 32 MHz TCXO (1.6V ... 3.3V, or "none" for a crystal).
-  # If the log says "Clock check FAILED", try another value, e.g. 1.8V.
-  # tcxo_voltage: 3.0V
+  # Supply voltage of the module's 32 MHz TCXO (1.6V ... 3.3V, "none" for a crystal).
+  # "auto" (default) tests the settings at start-up and shows the one it picked in the log.
+  # tcxo_voltage: auto
 
 light:
   - platform: halo2

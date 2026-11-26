@@ -65,12 +65,25 @@ void Halo2Component::dump_config() {
   const auto &v = this->radio_.version();
   ESP_LOGCONFIG(TAG, "  LR1121 version: hw %02X, use case %02X, firmware %u.%02u", v[0], v[1], v[2], v[3]);
   static const char *const VOLTAGES[] = {"1.6", "1.7", "1.8", "2.2", "2.4", "2.7", "3.0", "3.3"};
-  const uint8_t tcxo = this->radio_.tcxo_voltage_code();
+  const uint8_t tcxo = this->radio_.active_tcxo_code();
+  const char *how = this->radio_.tcxo_voltage_code() == LR1121Radio::TCXO_AUTO
+                        ? (this->radio_.auto_selected() ? " (auto-selected)" : " (auto: no setting passed, using 3.0 V)")
+                        : " (from config)";
   if (tcxo <= 7) {
-    ESP_LOGCONFIG(TAG, "  Clock: TCXO %s V", VOLTAGES[tcxo]);
+    ESP_LOGCONFIG(TAG, "  Clock: TCXO %s V%s", VOLTAGES[tcxo], how);
   } else {
-    ESP_LOGCONFIG(TAG, "  Clock: crystal");
+    ESP_LOGCONFIG(TAG, "  Clock: crystal%s", how);
   }
+  if (this->radio_.tx_check_ok()) {
+    ESP_LOGCONFIG(TAG, "  TX check: OK");
+  } else {
+    ESP_LOGE(TAG, "  TX check FAILED (errors 0x%04X)%s", this->radio_.tx_check_errors(),
+             (this->radio_.tx_check_errors() & 0x0020) ? ": the 32 MHz oscillator stops when transmitting; check the "
+                                                         "3.3V/GND wiring and power supply"
+                                                       : "");
+  }
+  if (this->radio_.reinit_count() > 0)
+    ESP_LOGW(TAG, "  Radio re-initialized %" PRIu32 " times after the oscillator stopped", this->radio_.reinit_count());
   if (this->radio_.clock_check_errors() == 0) {
     ESP_LOGCONFIG(TAG, "  Clock check: OK");
   } else {
