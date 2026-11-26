@@ -67,6 +67,8 @@ halo2:
   # poll_interval: 5s
   # Supply voltage of the module's 32 MHz TCXO (1.6V ... 3.3V, "none" for a crystal).
   # tcxo_voltage: 3.0V
+  # Transmit power in dBm (-18 ... 13). The lamp is usually close, so low power is enough.
+  # tx_power: 0
 
 light:
   - platform: halo2

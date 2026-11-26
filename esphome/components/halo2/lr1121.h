@@ -29,6 +29,9 @@ class LR1121Radio {
   /// SetTcxoMode voltage code (0: 1.6 V ... 6: 3.0 V, 7: 3.3 V), or TCXO_NONE for a crystal.
   void set_tcxo_voltage_code(uint8_t code) { this->tcxo_voltage_code_ = code; }
   uint8_t tcxo_voltage_code() const { return this->tcxo_voltage_code_; }
+  /// Output power of the 2.4 GHz PA in dBm (-18 ... 13).
+  void set_tx_power(int8_t dbm) { this->tx_power_ = dbm; }
+  int8_t tx_power() const { return this->tx_power_; }
   /// Clock setting in use.
   uint8_t active_tcxo_code() const { return this->active_tcxo_code_; }
   bool tx_check_ok() const { return this->tx_check_ok_; }
@@ -106,6 +109,7 @@ class LR1121Radio {
   bool tx_check_ok_{false};
   uint16_t tx_check_errors_{0};
   uint32_t reinit_count_{0};
+  int8_t tx_power_{0};
   uint32_t idle_osc_failures_{0};
   uint32_t configured_at_{0};
   Address sync_word_{};

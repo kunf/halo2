@@ -17,6 +17,7 @@ CONF_BUSY_PIN = "busy_pin"
 CONF_IRQ_PIN = "irq_pin"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_TCXO_VOLTAGE = "tcxo_voltage"
+CONF_TX_POWER = "tx_power"
 
 # SetTcxoMode voltage codes; "none" means the module has a plain crystal
 TCXO_VOLTAGES = {
@@ -55,6 +56,7 @@ CONFIG_SCHEMA = (
             cv.Optional(
                 CONF_POLL_INTERVAL, default="5s"
             ): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_TX_POWER, default=0): cv.int_range(min=-18, max=13),
             cv.Optional(CONF_TCXO_VOLTAGE, default="3.0V"): cv.one_of(
                 *TCXO_VOLTAGES, upper=True, space=""
             ),
@@ -77,6 +79,7 @@ async def to_code(config):
     cg.add(var.set_irq_pin(await cg.gpio_pin_expression(config[CONF_IRQ_PIN])))
     cg.add(var.set_poll_interval(config[CONF_POLL_INTERVAL]))
     cg.add(var.set_tcxo_voltage_code(TCXO_VOLTAGES[config[CONF_TCXO_VOLTAGE]]))
+    cg.add(var.set_tx_power(config[CONF_TX_POWER]))
     if CONF_ADDRESS in config:
         address = cg.RawExpression(
             "{" + ", ".join(f"0x{b:02X}" for b in config[CONF_ADDRESS]) + "}"

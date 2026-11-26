@@ -108,6 +108,7 @@ void Halo2Component::dump_config() {
     ESP_LOGCONFIG(TAG, "  Lamp address: not known yet, discovery running");
   }
   ESP_LOGCONFIG(TAG, "  Poll interval: %" PRIu32 " ms", this->poll_interval_);
+  ESP_LOGCONFIG(TAG, "  TX power: %d dBm", this->radio_.tx_power());
   ESP_LOGCONFIG(TAG, "  Transmissions: %" PRIu32 " sent, %" PRIu32 " completed, %" PRIu32 " replies",
                 this->radio_.tx_count(), this->radio_.tx_done_count(), this->radio_.reply_count());
   if (this->radio_.is_failed())

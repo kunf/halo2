@@ -278,7 +278,7 @@ bool LR1121Radio::configure_(const Address &sync_word, uint8_t tcxo_code) {
   // 2.4 GHz (HF) PA. Semtech's reference driver uses duty cycle 0 and HP select 0 for the
   // HF PA; the MicroPython driver's duty cycle of 4 is out of range for it.
   this->write_cmd_({HI(CMD_SET_PA_CONFIG), LO(CMD_SET_PA_CONFIG), 0x02, 0x00, 0x00, 0x00});
-  this->write_cmd_({HI(CMD_SET_TX_PARAMS), LO(CMD_SET_TX_PARAMS), 0x00, 0x02});
+  this->write_cmd_({HI(CMD_SET_TX_PARAMS), LO(CMD_SET_TX_PARAMS), static_cast<uint8_t>(this->tx_power_), 0x02});
   this->write_cmd_({HI(CMD_SET_RX_TX_FALLBACK), LO(CMD_SET_RX_TX_FALLBACK), FALLBACK_STDBY_XOSC});
   this->write_cmd_({HI(CMD_SET_RX_BOOSTED), LO(CMD_SET_RX_BOOSTED), 0x01});
   this->write_cmd_({HI(CMD_AUTO_TX_RX), LO(CMD_AUTO_TX_RX), 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00});

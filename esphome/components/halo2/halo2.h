@@ -51,6 +51,7 @@ class Halo2Component : public Component, public Halo2SPIDevice {
   void set_busy_pin(GPIOPin *pin) { this->radio_.set_busy_pin(pin); }
   void set_irq_pin(GPIOPin *pin) { this->radio_.set_irq_pin(pin); }
   void set_tcxo_voltage_code(uint8_t code) { this->radio_.set_tcxo_voltage_code(code); }
+  void set_tx_power(int8_t dbm) { this->radio_.set_tx_power(dbm); }
   void set_address(const Address &register_order);
   void set_poll_interval(uint32_t ms) { this->poll_interval_ = ms; }
 
