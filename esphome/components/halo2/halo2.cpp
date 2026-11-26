@@ -149,7 +149,8 @@ void Halo2Component::loop() {
 
   if (!this->ready_)
     return;
-  const bool reachable = this->last_reply_ != 0 && now - this->last_reply_ < UNREACHABLE_AFTER_MS;
+  // Fresh timestamp: a reply received during this loop is newer than `now`
+  const bool reachable = this->last_reply_ != 0 && millis() - this->last_reply_ < UNREACHABLE_AFTER_MS;
   if (this->lamp_reachable_ != static_cast<int8_t>(reachable)) {
     this->lamp_reachable_ = static_cast<int8_t>(reachable);
     if (reachable) {
