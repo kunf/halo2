@@ -187,6 +187,19 @@ bool LR1121Radio::init(const Address &sync_word) {
   return !this->failed_;
 }
 
+bool LR1121Radio::check_oscillator() {
+  if (this->failed_)
+    return false;
+  const uint16_t errors = this->read_errors_();
+  if (!(errors & ERR_HF_XOSC_START))
+    return true;
+  this->idle_osc_failures_++;
+  ESP_LOGW(TAG, "32 MHz oscillator stopped while receiving, %" PRIu32 " ms after radio set-up; re-initializing",
+           millis() - this->configured_at_);
+  this->reinit();
+  return false;
+}
+
 bool LR1121Radio::reinit() {
   this->reinit_count_++;
   return this->configure_(this->sync_word_, this->active_tcxo_code_);
@@ -267,6 +280,7 @@ bool LR1121Radio::configure_(const Address &sync_word, uint8_t tcxo_code) {
   this->write_cmd_({HI(CMD_SET_DIO_AS_RF_SWITCH), LO(CMD_SET_DIO_AS_RF_SWITCH), 0x03, 0x01, 0x01, 0x01, 0x01, 0x01,
                     0x00, 0x00});
   this->active_tcxo_code_ = tcxo_code;
+  this->configured_at_ = millis();
   if (tcxo_code <= 7) {
     this->write_cmd_({HI(CMD_SET_TCXO_MODE), LO(CMD_SET_TCXO_MODE), tcxo_code,
                       static_cast<uint8_t>(TCXO_TIMEOUT >> 16), static_cast<uint8_t>(TCXO_TIMEOUT >> 8),
@@ -385,7 +399,7 @@ size_t LR1121Radio::read_packet_(uint32_t irq, uint8_t *buf, size_t max_len) {
   return len;
 }
 
-bool LR1121Radio::transact(const Address &address, const RawPacket &packet, Packet *reply) {
+bool LR1121Radio::transact(const Address &address, const RawPacket &packet, Packet *reply, bool retry) {
   if (this->failed_)
     return false;
   this->write_cmd_({HI(CMD_SET_STANDBY), LO(CMD_SET_STANDBY), STDBY_XOSC});
@@ -415,8 +429,16 @@ bool LR1121Radio::transact(const Address &address, const RawPacket &packet, Pack
              " transmissions completed)",
              (irq & IRQ_TX_DONE) ? "done" : "NOT done", irq, errors, this->tx_done_count_, this->tx_count_);
     if (errors & ERR_HF_XOSC_START) {
-      ESP_LOGW(TAG, "32 MHz oscillator stopped during transmission, re-initializing the radio");
-      this->reinit();
+      if (retry) {
+        ESP_LOGW(TAG, "32 MHz oscillator stopped during transmission, %" PRIu32 " ms after radio set-up; "
+                      "re-initializing and retrying",
+                 millis() - this->configured_at_);
+        if (this->reinit())
+          return this->transact(address, packet, reply, false);
+      } else {
+        ESP_LOGW(TAG, "32 MHz oscillator stopped again right after re-initializing");
+        this->reinit();
+      }
       return false;
     }
     if (errors != 0)

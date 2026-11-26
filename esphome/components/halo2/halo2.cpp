@@ -83,7 +83,8 @@ void Halo2Component::dump_config() {
                                                        : "");
   }
   if (this->radio_.reinit_count() > 0)
-    ESP_LOGW(TAG, "  Radio re-initialized %" PRIu32 " times after the oscillator stopped", this->radio_.reinit_count());
+    ESP_LOGW(TAG, "  Radio re-initialized %" PRIu32 " times after the oscillator stopped (%" PRIu32 " while receiving)",
+             this->radio_.reinit_count(), this->radio_.idle_osc_failures());
   if (this->radio_.clock_check_errors() == 0) {
     ESP_LOGCONFIG(TAG, "  Clock check: OK");
   } else {
@@ -136,6 +137,10 @@ void Halo2Component::loop() {
   this->sniff_();
 
   const uint32_t now = millis();
+  if (now - this->last_osc_check_ >= 1000) {
+    this->last_osc_check_ = now;
+    this->radio_.check_oscillator();
+  }
   if (now - this->last_poll_ >= this->poll_interval_) {
     this->last_poll_ = now;
     this->poll_lamp_(this->ready_ ? CMD_SYNC : CMD_WAKE);

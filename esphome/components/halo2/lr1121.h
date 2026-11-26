@@ -54,7 +54,10 @@ class LR1121Radio {
 
   /// Send a packet and wait briefly for the lamp's reply. Returns true and fills
   /// `reply` with a CRC-valid packet, as send_with_ack() + receive_packet().
-  bool transact(const Address &address, const RawPacket &packet, Packet *reply);
+  bool transact(const Address &address, const RawPacket &packet, Packet *reply, bool retry = true);
+  /// Check the oscillator error flag while idle in RX; re-initializes the radio if it stopped.
+  bool check_oscillator();
+  uint32_t idle_osc_failures() const { return this->idle_osc_failures_; }
 
   /// Firmware version bytes read during init (hardware, use case, major, minor).
   const std::array<uint8_t, 4> &version() const { return this->version_; }
@@ -107,6 +110,8 @@ class LR1121Radio {
   bool tx_check_ok_{false};
   uint16_t tx_check_errors_{0};
   uint32_t reinit_count_{0};
+  uint32_t idle_osc_failures_{0};
+  uint32_t configured_at_{0};
   Address sync_word_{};
   uint32_t tx_count_{0};
   uint32_t tx_done_count_{0};
