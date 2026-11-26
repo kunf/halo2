@@ -54,10 +54,7 @@ class LR1121Radio {
 
   /// Send a packet and wait briefly for the lamp's reply. Returns true and fills
   /// `reply` with a CRC-valid packet, as send_with_ack() + receive_packet().
-  bool transact(const Address &address, const RawPacket &packet, Packet *reply, bool retry = true);
-  /// Check the oscillator error flag while idle in RX; re-initializes the radio if it stopped.
-  bool check_oscillator();
-  uint32_t idle_osc_failures() const { return this->idle_osc_failures_; }
+  bool transact(const Address &address, const RawPacket &packet, Packet *reply);
 
   /// Firmware version bytes read during init (hardware, use case, major, minor).
   const std::array<uint8_t, 4> &version() const { return this->version_; }
@@ -70,13 +67,6 @@ class LR1121Radio {
   uint32_t tx_done_count() const { return this->tx_done_count_; }
   uint32_t reply_count() const { return this->reply_count_; }
 
-  struct CmdFailure {
-    uint16_t opcode;
-    uint8_t status;  // 0 CMD_FAIL, 1 CMD_PERR
-  };
-  /// Commands the chip rejected (first few kept), for the config dump.
-  const std::array<CmdFailure, 8> &cmd_failures() const { return this->cmd_failures_; }
-  uint32_t cmd_failure_count() const { return this->cmd_failure_count_; }
 
  protected:
   bool wait_busy_(uint32_t timeout_ms = 1000);  // Same as the MicroPython driver
@@ -103,23 +93,19 @@ class LR1121Radio {
   uint16_t last_cmd_{0};
   uint16_t errors_{0};
   uint16_t clock_check_errors_{0};
-  uint8_t tcxo_voltage_code_{6};  // 3.0 V, as the MicroPython driver
+  uint8_t tcxo_voltage_code_{2};  // 1.8 V: 3.0 V stopped the oscillator during TX on a Core1121
   uint8_t active_tcxo_code_{6};
   bool chip_found_{false};
   bool tx_check_ok_{false};
   uint16_t tx_check_errors_{0};
   uint32_t reinit_count_{0};
   int8_t tx_power_{0};
-  uint32_t idle_osc_failures_{0};
-  uint32_t configured_at_{0};
   Address sync_word_{};
   uint32_t tx_count_{0};
   uint32_t tx_done_count_{0};
   uint32_t reply_count_{0};
   char failure_[80]{};
   char last_params_[40]{};
-  std::array<CmdFailure, 8> cmd_failures_{};
-  uint32_t cmd_failure_count_{0};
   std::array<uint8_t, 4> version_{};
 };
 

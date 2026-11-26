@@ -57,7 +57,7 @@ CONFIG_SCHEMA = (
                 CONF_POLL_INTERVAL, default="5s"
             ): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_TX_POWER, default=0): cv.int_range(min=-18, max=13),
-            cv.Optional(CONF_TCXO_VOLTAGE, default="3.0V"): cv.one_of(
+            cv.Optional(CONF_TCXO_VOLTAGE, default="1.8V"): cv.one_of(
                 *TCXO_VOLTAGES, upper=True, space=""
             ),
         }

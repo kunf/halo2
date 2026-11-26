@@ -67,7 +67,8 @@ halo2:
   # address: [0x4e, 0xf5, 0x5d, 0x43]
   # poll_interval: 5s
   # Supply voltage of the module's 32 MHz TCXO (1.6V ... 3.3V, "none" for a crystal).
-  # tcxo_voltage: 3.0V
+  # 1.8V works on the Waveshare Core1121; with 3.0V its oscillator stopped while transmitting.
+  # tcxo_voltage: 1.8V
   # Transmit power in dBm (-18 ... 13). The lamp is usually close, so low power is enough.
   # tx_power: 0
 

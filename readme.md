@@ -42,6 +42,12 @@ Entities: *Front light* (brightness and colour temperature), *Back light* (brigh
 
 The protocol code is unit tested against the MicroPython implementation (`tests/`), and CI compiles the firmware.
 
+Hardware notes (tested with a Waveshare Core1121 on an ESP32-WROOM DevKit):
+- Use a **2.4 GHz** antenna on the **2.4G_ANT** connector. The 868/915 MHz antenna in the kit is for the LoRa connector.
+- The LR1121's 32 MHz TCXO runs at **1.8 V** (`tcxo_voltage`, the default). At 3.0 V the oscillator stopped while transmitting (`HF_XOSC_START_ERR`), after which every radio command failed.
+- The radio must keep the oscillator running between a transmission and the reply window. The MicroPython LR1121 driver uses `AutoTxRx` intermediary mode `0x01` (STDBY_RC), which switches the TCXO off after every packet and made transmissions fail here. The ESPHome component uses `0x03` (frequency synthesis).
+- The log shows the clock setting and a start-up transmit check (`TX check: OK`) in the config dump.
+
 ## Connection diagram for Holtek BM5602-60-1
 
 ![](img/connection_diagramm.png)

@@ -114,7 +114,6 @@ class Halo2Component : public Component, public Halo2SPIDevice {
   uint32_t last_poll_{0};
   uint32_t last_reply_{0};
   uint32_t last_undecoded_log_{0};
-  uint32_t last_osc_check_{0};
   uint8_t pid_{0};
 
   // Queued update (request_update / process_updates in benq_halo/__init__.py)

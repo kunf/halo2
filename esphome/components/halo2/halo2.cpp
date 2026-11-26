@@ -15,7 +15,8 @@ static const char *const TAG = "halo2";
 
 static constexpr uint8_t NO_COMMAND = 0xFF;
 static constexpr uint32_t SYNC_POLL_INTERVAL_MS = 500;  // Between polls while the lamp applies an update
-static constexpr uint8_t SYNC_MAX_POLLS = 5;            // Give up confirming an update after this
+static constexpr uint8_t SYNC_MAX_POLLS = 5;
+static constexpr uint8_t COMMAND_ATTEMPTS = 3;          // Sends of a command without a reply            // Give up confirming an update after this
 static constexpr uint32_t UNREACHABLE_AFTER_MS = 30000;
 static constexpr uint32_t DISCOVERY_HINT_INTERVAL_MS = 15000;
 
@@ -80,8 +81,7 @@ void Halo2Component::dump_config() {
                                                        : "");
   }
   if (this->radio_.reinit_count() > 0)
-    ESP_LOGW(TAG, "  Radio re-initialized %" PRIu32 " times after the oscillator stopped (%" PRIu32 " while receiving)",
-             this->radio_.reinit_count(), this->radio_.idle_osc_failures());
+    ESP_LOGW(TAG, "  Radio re-initialized %" PRIu32 " times after the oscillator stopped", this->radio_.reinit_count());
   if (this->radio_.clock_check_errors() == 0) {
     ESP_LOGCONFIG(TAG, "  Clock check: OK");
   } else {
@@ -90,13 +90,6 @@ void Halo2Component::dump_config() {
   }
   if (this->radio_.errors() != 0)
     ESP_LOGW(TAG, "  LR1121 errors during setup: 0x%04X", this->radio_.errors());
-  const uint32_t rejected = this->radio_.cmd_failure_count();
-  for (uint32_t i = 0; i < rejected && i < this->radio_.cmd_failures().size(); i++) {
-    const auto &f = this->radio_.cmd_failures()[i];
-    ESP_LOGW(TAG, "  LR1121 rejected command 0x%04X: %s", f.opcode, f.status == 0 ? "CMD_FAIL" : "CMD_PERR");
-  }
-  if (rejected > this->radio_.cmd_failures().size())
-    ESP_LOGW(TAG, "  ... %" PRIu32 " rejected commands in total", rejected);
   if (this->radio_.is_failed()) {
     // Nothing below applies
   } else if (this->have_address_) {
@@ -135,10 +128,6 @@ void Halo2Component::loop() {
   this->sniff_();
 
   const uint32_t now = millis();
-  if (now - this->last_osc_check_ >= 1000) {
-    this->last_osc_check_ = now;
-    this->radio_.check_oscillator();
-  }
   if (now - this->last_poll_ >= this->poll_interval_) {
     this->last_poll_ = now;
     this->poll_lamp_(this->ready_ ? CMD_SYNC : CMD_WAKE);
@@ -284,7 +273,7 @@ void Halo2Component::sniff_() {
         this->last_undecoded_log_ = now;
         char hex[SNIFF_LEN * 3];
         to_hex(buf, len, hex, sizeof(hex));
-        ESP_LOGD(TAG, "Undecoded capture (%u bytes, first packet CRC %s): %s", (unsigned) len,
+        ESP_LOGV(TAG, "Undecoded capture (%u bytes, first packet CRC %s): %s", (unsigned) len,
                  parse_packet(this->address_, buf, len).crc_valid ? "ok" : "bad", hex);
       }
       return;
@@ -323,8 +312,13 @@ void Halo2Component::process_updates_() {
              command, this->state_.power, this->state_.front, this->state_.back, this->state_.front_brightness,
              this->state_.back_brightness, this->state_.color_temp, this->state_.ultrasonic,
              auto_mode ? " auto" : "");
+    // The lamp occasionally misses a packet; resend like the remote does
     Payload reply;
-    this->exchange_(command, this->state_, &reply, auto_mode);
+    for (uint8_t attempt = 1; attempt <= COMMAND_ATTEMPTS; attempt++) {
+      if (this->exchange_(command, this->state_, &reply, auto_mode))
+        break;
+      ESP_LOGD(TAG, "No reply to command (attempt %u/%u)", attempt, COMMAND_ATTEMPTS);
+    }
     this->sync_polls_ = SYNC_MAX_POLLS;
     this->have_sync_reply_ = false;
     this->last_sync_poll_ = now - SYNC_POLL_INTERVAL_MS;  // First confirmation poll on the next loop
