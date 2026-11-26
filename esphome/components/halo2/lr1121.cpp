@@ -32,6 +32,7 @@ static constexpr uint16_t CMD_SET_FS = 0x011D;
 static constexpr uint8_t STDBY_RC = 0x00;
 static constexpr uint8_t STDBY_XOSC = 0x01;  // Keeps the 32 MHz oscillator running
 static constexpr uint8_t FALLBACK_STDBY_XOSC = 0x02;
+static constexpr uint8_t AUTO_TX_RX_MODE_FS = 0x03;  // AutoTxRx intermediary mode: frequency synthesis
 static constexpr uint16_t ERR_HF_XOSC_START = 0x0020;
 // TCXO start-up timeout in 30.52 us steps: ~31 ms (the MicroPython driver used ~9 ms)
 static constexpr uint32_t TCXO_TIMEOUT = 0x000400;
@@ -406,8 +407,11 @@ bool LR1121Radio::transact(const Address &address, const RawPacket &packet, Pack
   this->set_packet_length_(PACKET_LEN);
   this->write_cmd_({HI(CMD_CLEAR_IRQ), LO(CMD_CLEAR_IRQ), 0xFF, 0xFF, 0xFF, 0xFF});
   this->write_cmd_({HI(CMD_CLEAR_RX_BUFFER), LO(CMD_CLEAR_RX_BUFFER)});
-  // Switch to RX right after TX to catch the lamp's reply
-  this->write_cmd_({HI(CMD_AUTO_TX_RX), LO(CMD_AUTO_TX_RX), 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00});
+  // Switch to RX right after TX to catch the lamp's reply. The intermediary mode between TX
+  // and RX must keep the 32 MHz oscillator running: 0x01 (STDBY_RC, the MicroPython driver's
+  // value) switches it off, and restarting it with no delay fails with HF_XOSC_START_ERR.
+  // 0x03 keeps the frequency synthesizer on for the fastest turnaround.
+  this->write_cmd_({HI(CMD_AUTO_TX_RX), LO(CMD_AUTO_TX_RX), 0x00, 0x00, 0x00, AUTO_TX_RX_MODE_FS, 0x00, 0x00, 0x00});
   this->write_cmd_(CMD_WRITE_BUFFER, packet.data(), packet.size());
   this->write_cmd_({HI(CMD_SET_TX), LO(CMD_SET_TX), 0x00, 0x00, 0x00});
 
