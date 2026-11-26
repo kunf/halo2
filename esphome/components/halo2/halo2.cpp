@@ -64,6 +64,19 @@ void Halo2Component::dump_config() {
   ESP_LOGCONFIG(TAG, "BenQ ScreenBar HALO 2 (LR1121):");
   const auto &v = this->radio_.version();
   ESP_LOGCONFIG(TAG, "  LR1121 version: hw %02X, use case %02X, firmware %u.%02u", v[0], v[1], v[2], v[3]);
+  static const char *const VOLTAGES[] = {"1.6", "1.7", "1.8", "2.2", "2.4", "2.7", "3.0", "3.3"};
+  const uint8_t tcxo = this->radio_.tcxo_voltage_code();
+  if (tcxo <= 7) {
+    ESP_LOGCONFIG(TAG, "  Clock: TCXO %s V", VOLTAGES[tcxo]);
+  } else {
+    ESP_LOGCONFIG(TAG, "  Clock: crystal");
+  }
+  if (this->radio_.clock_check_errors() == 0) {
+    ESP_LOGCONFIG(TAG, "  Clock check: OK");
+  } else {
+    ESP_LOGE(TAG, "  Clock check FAILED (errors 0x%04X)%s", this->radio_.clock_check_errors(),
+             (this->radio_.clock_check_errors() & 0x0020) ? ": 32 MHz oscillator did not start, try another tcxo_voltage" : "");
+  }
   if (this->radio_.errors() != 0)
     ESP_LOGW(TAG, "  LR1121 errors during setup: 0x%04X", this->radio_.errors());
   const uint32_t rejected = this->radio_.cmd_failure_count();

@@ -16,6 +16,12 @@ CONF_TRANSCEIVER = "transceiver"
 CONF_BUSY_PIN = "busy_pin"
 CONF_IRQ_PIN = "irq_pin"
 CONF_POLL_INTERVAL = "poll_interval"
+CONF_TCXO_VOLTAGE = "tcxo_voltage"
+
+# SetTcxoMode voltage codes; "none" means the module has a plain crystal
+TCXO_VOLTAGES = {
+    "1.6V": 0, "1.7V": 1, "1.8V": 2, "2.2V": 3, "2.4V": 4, "2.7V": 5, "3.0V": 6, "3.3V": 7, "NONE": 0xFF,
+}
 
 halo2_ns = cg.esphome_ns.namespace("halo2")
 Halo2Component = halo2_ns.class_("Halo2Component", cg.Component, spi.SPIDevice)
@@ -49,6 +55,9 @@ CONFIG_SCHEMA = (
             cv.Optional(
                 CONF_POLL_INTERVAL, default="5s"
             ): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_TCXO_VOLTAGE, default="3.0V"): cv.one_of(
+                *TCXO_VOLTAGES, upper=True, space=""
+            ),
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -67,6 +76,7 @@ async def to_code(config):
     cg.add(var.set_busy_pin(await cg.gpio_pin_expression(config[CONF_BUSY_PIN])))
     cg.add(var.set_irq_pin(await cg.gpio_pin_expression(config[CONF_IRQ_PIN])))
     cg.add(var.set_poll_interval(config[CONF_POLL_INTERVAL]))
+    cg.add(var.set_tcxo_voltage_code(TCXO_VOLTAGES[config[CONF_TCXO_VOLTAGE]]))
     if CONF_ADDRESS in config:
         address = cg.RawExpression(
             "{" + ", ".join(f"0x{b:02X}" for b in config[CONF_ADDRESS]) + "}"

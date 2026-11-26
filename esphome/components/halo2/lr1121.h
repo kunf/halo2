@@ -25,6 +25,11 @@ class LR1121Radio {
   void set_reset_pin(GPIOPin *pin) { this->reset_pin_ = pin; }
   void set_busy_pin(GPIOPin *pin) { this->busy_pin_ = pin; }
   void set_irq_pin(GPIOPin *pin) { this->irq_pin_ = pin; }
+  /// SetTcxoMode voltage code (0: 1.6 V ... 6: 3.0 V, 7: 3.3 V), or 0xFF for a crystal.
+  void set_tcxo_voltage_code(uint8_t code) { this->tcxo_voltage_code_ = code; }
+  uint8_t tcxo_voltage_code() const { return this->tcxo_voltage_code_; }
+  /// GetErrors after the start-up clock check (0 = clock OK).
+  uint16_t clock_check_errors() const { return this->clock_check_errors_; }
 
   /// Reset and configure the chip. Returns false if it is missing or not responding.
   bool init(const Address &sync_word);
@@ -81,6 +86,8 @@ class LR1121Radio {
   bool failed_{false};
   uint16_t last_cmd_{0};
   uint16_t errors_{0};
+  uint16_t clock_check_errors_{0};
+  uint8_t tcxo_voltage_code_{6};  // 3.0 V, as the MicroPython driver
   uint32_t tx_count_{0};
   uint32_t tx_done_count_{0};
   uint32_t reply_count_{0};
