@@ -51,12 +51,23 @@ class LR1121Radio {
   uint32_t tx_done_count() const { return this->tx_done_count_; }
   uint32_t reply_count() const { return this->reply_count_; }
 
+  struct CmdFailure {
+    uint16_t opcode;
+    uint8_t status;  // 0 CMD_FAIL, 1 CMD_PERR
+  };
+  /// Commands the chip rejected (first few kept), for the config dump.
+  const std::array<CmdFailure, 8> &cmd_failures() const { return this->cmd_failures_; }
+  uint32_t cmd_failure_count() const { return this->cmd_failure_count_; }
+
  protected:
   bool wait_busy_(uint32_t timeout_ms = 1000);  // Same as the MicroPython driver
   void write_cmd_(std::initializer_list<uint8_t> opcode_and_params);
   void write_cmd_(uint16_t opcode, const uint8_t *params, size_t len);
   bool read_cmd_(std::initializer_list<uint8_t> opcode_and_params, uint8_t *out, size_t len);
   void set_packet_length_(uint8_t len);
+  void check_stat1_(uint8_t stat1);
+  void begin_cmd_(const uint8_t *data, size_t len);
+  uint16_t read_errors_();
   void write_sync_word_(const Address &sync_word);
   uint32_t read_irq_();
   size_t read_packet_(uint32_t irq, uint8_t *buf, size_t max_len);
@@ -74,6 +85,9 @@ class LR1121Radio {
   uint32_t tx_done_count_{0};
   uint32_t reply_count_{0};
   char failure_[80]{};
+  char last_params_[40]{};
+  std::array<CmdFailure, 8> cmd_failures_{};
+  uint32_t cmd_failure_count_{0};
   std::array<uint8_t, 4> version_{};
 };
 

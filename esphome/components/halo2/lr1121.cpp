@@ -72,14 +72,36 @@ bool LR1121Radio::wait_busy_(uint32_t timeout_ms) {
   return true;
 }
 
+// Every command transaction returns Stat1 in its first byte. Its bits 3:1 are the status of
+// the previous command: 0 CMD_FAIL, 1 CMD_PERR (bad parameters), 2 CMD_OK, 3 CMD_DAT.
+void LR1121Radio::check_stat1_(uint8_t stat1) {
+  const uint8_t status = (stat1 >> 1) & 0x07;
+  if (this->last_cmd_ != 0 && status <= 1) {
+    if (this->cmd_failure_count_ < this->cmd_failures_.size()) {
+      this->cmd_failures_[this->cmd_failure_count_] = {this->last_cmd_, status};
+    }
+    this->cmd_failure_count_++;
+    if (this->cmd_failure_count_ <= 20) {
+      ESP_LOGW(TAG, "Command 0x%04X (params %s) was rejected: %s", this->last_cmd_, this->last_params_,
+               status == 0 ? "CMD_FAIL" : "CMD_PERR (bad parameters)");
+    }
+  }
+}
+
+void LR1121Radio::begin_cmd_(const uint8_t *data, size_t len) {
+  this->spi_->enable();
+  this->check_stat1_(this->spi_->transfer_byte(data[0]));
+  for (size_t i = 1; i < len; i++)
+    this->spi_->write_byte(data[i]);
+  this->spi_->disable();
+  this->last_cmd_ = static_cast<uint16_t>((data[0] << 8) | data[1]);
+  to_hex(data + 2, len > 2 ? (len - 2 > 12 ? 12 : len - 2) : 0, this->last_params_, sizeof(this->last_params_));
+}
+
 void LR1121Radio::write_cmd_(std::initializer_list<uint8_t> data) {
   if (!this->wait_busy_())
     return;
-  this->spi_->enable();
-  for (uint8_t b : data)
-    this->spi_->write_byte(b);
-  this->spi_->disable();
-  this->last_cmd_ = static_cast<uint16_t>((data.begin()[0] << 8) | data.begin()[1]);
+  this->begin_cmd_(data.begin(), data.size());
   delayMicroseconds(50);
 }
 
@@ -87,22 +109,19 @@ void LR1121Radio::write_cmd_(uint16_t opcode, const uint8_t *params, size_t len)
   if (!this->wait_busy_())
     return;
   this->spi_->enable();
-  this->spi_->write_byte(HI(opcode));
+  this->check_stat1_(this->spi_->transfer_byte(HI(opcode)));
   this->spi_->write_byte(LO(opcode));
   this->spi_->write_array(params, len);
   this->spi_->disable();
   this->last_cmd_ = opcode;
+  to_hex(params, len > 12 ? 12 : len, this->last_params_, sizeof(this->last_params_));
   delayMicroseconds(50);
 }
 
 bool LR1121Radio::read_cmd_(std::initializer_list<uint8_t> data, uint8_t *out, size_t len) {
   if (!this->wait_busy_())
     return false;
-  this->spi_->enable();
-  for (uint8_t b : data)
-    this->spi_->write_byte(b);
-  this->spi_->disable();
-  this->last_cmd_ = static_cast<uint16_t>((data.begin()[0] << 8) | data.begin()[1]);
+  this->begin_cmd_(data.begin(), data.size());
   if (!this->wait_busy_())
     return false;
   this->spi_->enable();
@@ -128,6 +147,7 @@ bool LR1121Radio::init(const Address &sync_word) {
   this->failed_ = false;
   this->failure_[0] = '\0';
   this->last_cmd_ = 0;
+  this->cmd_failure_count_ = 0;
   this->reset_pin_->setup();
   this->busy_pin_->setup();
   this->irq_pin_->setup();
@@ -164,9 +184,7 @@ bool LR1121Radio::init(const Address &sync_word) {
   this->write_cmd_({HI(CMD_CLEAR_ERRORS), LO(CMD_CLEAR_ERRORS)});
   this->write_cmd_({HI(CMD_CALIBRATE), LO(CMD_CALIBRATE)});
   delay(10);
-  uint8_t errors[3] = {};
-  if (this->read_cmd_({HI(CMD_GET_ERRORS), LO(CMD_GET_ERRORS)}, errors, sizeof(errors)))
-    this->errors_ = static_cast<uint16_t>((errors[1] << 8) | errors[2]);
+  this->errors_ = this->read_errors_();
 
   this->write_cmd_({HI(CMD_SET_PKT_TYPE), LO(CMD_SET_PKT_TYPE), 0x01});  // GFSK
   this->write_cmd_({HI(CMD_SET_RF_FREQUENCY), LO(CMD_SET_RF_FREQUENCY), BE32(RF_FREQUENCY_HZ)});
@@ -175,16 +193,16 @@ bool LR1121Radio::init(const Address &sync_word) {
   this->set_packet_length_(SNIFF_LEN);
   // Stay in standby until everything is configured: settings sent while in RX can be rejected
   this->write_sync_word_(sync_word);
-  this->write_cmd_({HI(CMD_SET_PA_CONFIG), LO(CMD_SET_PA_CONFIG), 0x02, 0x00, 0x04, 0x00});
+  // 2.4 GHz (HF) PA. Semtech's reference driver uses duty cycle 0 and HP select 0 for the
+  // HF PA; the MicroPython driver's duty cycle of 4 is out of range for it.
+  this->write_cmd_({HI(CMD_SET_PA_CONFIG), LO(CMD_SET_PA_CONFIG), 0x02, 0x00, 0x00, 0x00});
   this->write_cmd_({HI(CMD_SET_TX_PARAMS), LO(CMD_SET_TX_PARAMS), 0x00, 0x02});
   this->write_cmd_({HI(CMD_SET_RX_TX_FALLBACK), LO(CMD_SET_RX_TX_FALLBACK), 0x01});
   this->write_cmd_({HI(CMD_SET_RX_BOOSTED), LO(CMD_SET_RX_BOOSTED), 0x01});
   this->write_cmd_({HI(CMD_AUTO_TX_RX), LO(CMD_AUTO_TX_RX), 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00});
-  // RX_DONE on DIO9. TX_DONE goes to the (unconnected) DIO11 only so that its IRQ flag is
-  // latched for diagnostics without ending the wait for the reply early.
-  this->write_cmd_({HI(CMD_SET_DIO_IRQ_PARAMS), LO(CMD_SET_DIO_IRQ_PARAMS), BE32(IRQ_RX_DONE), BE32(IRQ_TX_DONE)});
-  if (this->read_cmd_({HI(CMD_GET_ERRORS), LO(CMD_GET_ERRORS)}, errors, sizeof(errors)))
-    this->errors_ |= static_cast<uint16_t>((errors[1] << 8) | errors[2]);
+  // RX_DONE on DIO9 (the IRQ status register latches the other IRQs too)
+  this->write_cmd_({HI(CMD_SET_DIO_IRQ_PARAMS), LO(CMD_SET_DIO_IRQ_PARAMS), BE32(IRQ_RX_DONE), 0x00, 0x00, 0x00, 0x00});
+  this->errors_ |= this->read_errors_();
   this->listen();
   return !this->failed_;
 }
@@ -201,10 +219,24 @@ void LR1121Radio::set_sync_word(const Address &sync_word) {
 }
 
 uint32_t LR1121Radio::read_irq_() {
-  uint8_t status[6] = {};
-  if (!this->read_cmd_({HI(CMD_GET_STATUS), LO(CMD_GET_STATUS)}, status, sizeof(status)))
+  // GetStatus returns Stat1, Stat2 and IrqStatus during the command itself
+  if (!this->wait_busy_())
     return 0;
-  return (uint32_t(status[2]) << 24) | (uint32_t(status[3]) << 16) | (uint32_t(status[4]) << 8) | uint32_t(status[5]);
+  uint8_t buf[6] = {HI(CMD_GET_STATUS), LO(CMD_GET_STATUS), 0x00, 0x00, 0x00, 0x00};
+  this->spi_->enable();
+  this->spi_->transfer_array(buf, sizeof(buf));
+  this->spi_->disable();
+  this->check_stat1_(buf[0]);
+  this->last_cmd_ = CMD_GET_STATUS;
+  this->last_params_[0] = '\0';
+  return (uint32_t(buf[2]) << 24) | (uint32_t(buf[3]) << 16) | (uint32_t(buf[4]) << 8) | uint32_t(buf[5]);
+}
+
+uint16_t LR1121Radio::read_errors_() {
+  uint8_t errors[3] = {};
+  if (!this->read_cmd_({HI(CMD_GET_ERRORS), LO(CMD_GET_ERRORS)}, errors, sizeof(errors)))
+    return 0;
+  return static_cast<uint16_t>((errors[1] << 8) | errors[2]);
 }
 
 void LR1121Radio::restart_rx_() {
@@ -224,7 +256,7 @@ void LR1121Radio::listen() {
 size_t LR1121Radio::read_raw(uint8_t *buf, size_t max_len) {
   if (this->failed_ || !this->irq_pin_->digital_read())
     return 0;
-  return this->read_packet_(this->read_irq_(), buf, max_len);
+  return this->read_packet_(IRQ_RX_DONE, buf, max_len);  // DIO9 only signals RX_DONE
 }
 
 size_t LR1121Radio::read_packet_(uint32_t irq, uint8_t *buf, size_t max_len) {
@@ -268,15 +300,19 @@ bool LR1121Radio::transact(const Address &address, const RawPacket &packet, Pack
   while (!this->irq_pin_->digital_read() && millis() - start <= REPLY_TIMEOUT_MS)
     delayMicroseconds(10);
 
-  const uint32_t irq = this->read_irq_();
+  const bool rx_done = this->irq_pin_->digital_read();
+  uint32_t irq = this->read_irq_();
   this->tx_count_++;
   if (irq & IRQ_TX_DONE)
     this->tx_done_count_++;
   uint8_t buf[SNIFF_LEN];
-  const size_t len = this->read_packet_(irq, buf, sizeof(buf));  // Also restarts sniffing
+  const size_t len = this->read_packet_(rx_done ? IRQ_RX_DONE : 0, buf, sizeof(buf));  // Also restarts sniffing
   if (len < PACKET_LEN) {
-    ESP_LOGD(TAG, "No reply from lamp (TX %s, IRQ 0x%08" PRIX32 ", %" PRIu32 "/%" PRIu32 " transmissions completed)",
-             (irq & IRQ_TX_DONE) ? "done" : "NOT done", irq, this->tx_done_count_, this->tx_count_);
+    const uint16_t errors = this->read_errors_();
+    ESP_LOGD(TAG,
+             "No reply from lamp (TX %s, IRQ 0x%08" PRIX32 ", errors 0x%04X, %" PRIu32 "/%" PRIu32
+             " transmissions completed)",
+             (irq & IRQ_TX_DONE) ? "done" : "NOT done", irq, errors, this->tx_done_count_, this->tx_count_);
     this->listen();
     return false;
   }

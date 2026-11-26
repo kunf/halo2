@@ -65,7 +65,14 @@ void Halo2Component::dump_config() {
   const auto &v = this->radio_.version();
   ESP_LOGCONFIG(TAG, "  LR1121 version: hw %02X, use case %02X, firmware %u.%02u", v[0], v[1], v[2], v[3]);
   if (this->radio_.errors() != 0)
-    ESP_LOGW(TAG, "  LR1121 errors after calibration: 0x%04X", this->radio_.errors());
+    ESP_LOGW(TAG, "  LR1121 errors during setup: 0x%04X", this->radio_.errors());
+  const uint32_t rejected = this->radio_.cmd_failure_count();
+  for (uint32_t i = 0; i < rejected && i < this->radio_.cmd_failures().size(); i++) {
+    const auto &f = this->radio_.cmd_failures()[i];
+    ESP_LOGW(TAG, "  LR1121 rejected command 0x%04X: %s", f.opcode, f.status == 0 ? "CMD_FAIL" : "CMD_PERR");
+  }
+  if (rejected > this->radio_.cmd_failures().size())
+    ESP_LOGW(TAG, "  ... %" PRIu32 " rejected commands in total", rejected);
   if (this->radio_.is_failed()) {
     // Nothing below applies
   } else if (this->have_address_) {
