@@ -65,6 +65,12 @@ void Halo2Component::dump_config() {
   ESP_LOGCONFIG(TAG, "BenQ ScreenBar HALO 2 (LR1121):");
   const auto &v = this->radio_.version();
   ESP_LOGCONFIG(TAG, "  LR1121 version: hw %02X, use case %02X, firmware %u.%02u", v[0], v[1], v[2], v[3]);
+  if (!this->radio_.chip_found()) {
+    // Nothing else about the radio is meaningful if it never answered
+    ESP_LOGE(TAG, "  Radio failed: %s", this->radio_.failure());
+    ESP_LOGE(TAG, "  Check the module's 3.3V/GND power and the MISO, CS, SCK, MOSI, RESET and BUSY wires");
+    return;
+  }
   static const char *const VOLTAGES[] = {"1.6", "1.7", "1.8", "2.2", "2.4", "2.7", "3.0", "3.3"};
   const uint8_t tcxo = this->radio_.active_tcxo_code();
   if (tcxo <= 7) {

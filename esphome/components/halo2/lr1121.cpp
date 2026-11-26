@@ -150,6 +150,7 @@ void LR1121Radio::set_packet_length_(uint8_t len) {
 
 bool LR1121Radio::init(const Address &sync_word) {
   this->sync_word_ = sync_word;
+  this->active_tcxo_code_ = this->tcxo_voltage_code_;
   if (!this->configure_(sync_word, this->tcxo_voltage_code_))
     return false;
   this->tx_check_ok_ = this->tx_check_();

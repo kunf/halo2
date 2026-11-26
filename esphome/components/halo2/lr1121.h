@@ -59,6 +59,8 @@ class LR1121Radio {
   /// Firmware version bytes read during init (hardware, use case, major, minor).
   const std::array<uint8_t, 4> &version() const { return this->version_; }
   bool is_failed() const { return this->failed_; }
+  /// True once the chip answered the version request.
+  bool chip_found() const { return this->chip_found_; }
   /// Why the radio failed, empty if it didn't.
   const char *failure() const { return this->failure_; }
   /// LR1121 GetErrors flags read after calibration (0 = none).
