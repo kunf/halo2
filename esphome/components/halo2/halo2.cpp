@@ -77,6 +77,8 @@ void Halo2Component::dump_config() {
     ESP_LOGCONFIG(TAG, "  Lamp address: not known yet, discovery running");
   }
   ESP_LOGCONFIG(TAG, "  Poll interval: %" PRIu32 " ms", this->poll_interval_);
+  ESP_LOGCONFIG(TAG, "  Transmissions: %" PRIu32 " sent, %" PRIu32 " completed, %" PRIu32 " replies",
+                this->radio_.tx_count(), this->radio_.tx_done_count(), this->radio_.reply_count());
   if (this->radio_.is_failed())
     ESP_LOGE(TAG, "  Radio failed: %s", this->radio_.failure());
 }
@@ -232,17 +234,31 @@ void Halo2Component::poll_lamp_(uint8_t command) {
 void Halo2Component::sniff_() {
   uint8_t buf[SNIFF_LEN];
   const size_t len = this->radio_.read_raw(buf, sizeof(buf));
-  if (len <= PACKET_LEN)
-    return;
   // A capture holds the remote control's request followed by the lamp's reply; use the
   // first CRC-valid one with NO_ACK set, as lr1121.receive_without_ack() does.
+  if (len == 0)
+    return;
   Packet p = parse_packet(this->address_, buf, len);
   if (!(p.crc_valid && p.pkt_len == PAYLOAD_LEN && p.no_ack)) {
-    if (!find_second_packet(this->address_, buf, len, &p) || !p.no_ack)
+    if (!find_second_packet(this->address_, buf, len, &p) || !p.no_ack) {
+      // Something matched our address but didn't decode: log it (rate limited) for diagnosis
+      const uint32_t now = millis();
+      if (now - this->last_undecoded_log_ >= 1000) {
+        this->last_undecoded_log_ = now;
+        char hex[SNIFF_LEN * 3];
+        to_hex(buf, len, hex, sizeof(hex));
+        ESP_LOGD(TAG, "Undecoded capture (%u bytes, first packet CRC %s): %s", (unsigned) len,
+                 parse_packet(this->address_, buf, len).crc_valid ? "ok" : "bad", hex);
+      }
       return;
+    }
   }
-  if (!validate_payload(p.payload))
+  if (!validate_payload(p.payload)) {
+    char hex[PAYLOAD_LEN * 3];
+    to_hex(p.payload.data(), PAYLOAD_LEN, hex, sizeof(hex));
+    ESP_LOGD(TAG, "Sniffed packet with unexpected payload: %s", hex);
     return;
+  }
   ESP_LOGD(TAG, "Remote control exchange sniffed (command 0x%02X)", p.payload[0]);
   this->last_reply_ = millis();
   this->apply_lamp_state_(parse_payload(p.payload), "remote");

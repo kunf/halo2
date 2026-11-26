@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
 #include <cinttypes>
@@ -41,6 +42,7 @@ static constexpr uint16_t CMD_SET_RX_TX_FALLBACK = 0x0213;
 static constexpr uint16_t CMD_SET_PA_CONFIG = 0x0215;
 static constexpr uint16_t CMD_SET_RX_BOOSTED = 0x0227;
 
+static constexpr uint32_t IRQ_TX_DONE = 0x00000004;
 static constexpr uint32_t IRQ_RX_DONE = 0x00000008;
 static constexpr uint32_t RF_FREQUENCY_HZ = 2405000000UL;  // Channel 1
 static constexpr uint32_t BITRATE = 125000;
@@ -171,23 +173,38 @@ bool LR1121Radio::init(const Address &sync_word) {
   this->write_cmd_(
       {HI(CMD_SET_MOD_PARAMS), LO(CMD_SET_MOD_PARAMS), BE32(BITRATE), 0x09, 0x09, BE32(FREQ_DEVIATION)});
   this->set_packet_length_(SNIFF_LEN);
-  this->set_sync_word(sync_word);
+  // Stay in standby until everything is configured: settings sent while in RX can be rejected
+  this->write_sync_word_(sync_word);
   this->write_cmd_({HI(CMD_SET_PA_CONFIG), LO(CMD_SET_PA_CONFIG), 0x02, 0x00, 0x04, 0x00});
   this->write_cmd_({HI(CMD_SET_TX_PARAMS), LO(CMD_SET_TX_PARAMS), 0x00, 0x02});
   this->write_cmd_({HI(CMD_SET_RX_TX_FALLBACK), LO(CMD_SET_RX_TX_FALLBACK), 0x01});
   this->write_cmd_({HI(CMD_SET_RX_BOOSTED), LO(CMD_SET_RX_BOOSTED), 0x01});
   this->write_cmd_({HI(CMD_AUTO_TX_RX), LO(CMD_AUTO_TX_RX), 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00});
-  // Route RX_DONE to DIO9
-  this->write_cmd_({HI(CMD_SET_DIO_IRQ_PARAMS), LO(CMD_SET_DIO_IRQ_PARAMS), BE32(IRQ_RX_DONE), 0x00, 0x00, 0x00, 0x00});
+  // RX_DONE on DIO9. TX_DONE goes to the (unconnected) DIO11 only so that its IRQ flag is
+  // latched for diagnostics without ending the wait for the reply early.
+  this->write_cmd_({HI(CMD_SET_DIO_IRQ_PARAMS), LO(CMD_SET_DIO_IRQ_PARAMS), BE32(IRQ_RX_DONE), BE32(IRQ_TX_DONE)});
+  if (this->read_cmd_({HI(CMD_GET_ERRORS), LO(CMD_GET_ERRORS)}, errors, sizeof(errors)))
+    this->errors_ |= static_cast<uint16_t>((errors[1] << 8) | errors[2]);
   this->listen();
   return !this->failed_;
 }
 
-void LR1121Radio::set_sync_word(const Address &sync_word) {
-  this->write_cmd_({HI(CMD_SET_STANDBY), LO(CMD_SET_STANDBY), 0x00});
+void LR1121Radio::write_sync_word_(const Address &sync_word) {
   this->write_cmd_({HI(CMD_SET_GFSK_SYNC_WORD), LO(CMD_SET_GFSK_SYNC_WORD), sync_word[0], sync_word[1], sync_word[2],
                     sync_word[3], 0x00, 0x00, 0x00, 0x00});
+}
+
+void LR1121Radio::set_sync_word(const Address &sync_word) {
+  this->write_cmd_({HI(CMD_SET_STANDBY), LO(CMD_SET_STANDBY), 0x00});
+  this->write_sync_word_(sync_word);
   this->listen();
+}
+
+uint32_t LR1121Radio::read_irq_() {
+  uint8_t status[6] = {};
+  if (!this->read_cmd_({HI(CMD_GET_STATUS), LO(CMD_GET_STATUS)}, status, sizeof(status)))
+    return 0;
+  return (uint32_t(status[2]) << 24) | (uint32_t(status[3]) << 16) | (uint32_t(status[4]) << 8) | uint32_t(status[5]);
 }
 
 void LR1121Radio::restart_rx_() {
@@ -207,12 +224,10 @@ void LR1121Radio::listen() {
 size_t LR1121Radio::read_raw(uint8_t *buf, size_t max_len) {
   if (this->failed_ || !this->irq_pin_->digital_read())
     return 0;
+  return this->read_packet_(this->read_irq_(), buf, max_len);
+}
 
-  uint8_t status[6] = {};
-  if (!this->read_cmd_({HI(CMD_GET_STATUS), LO(CMD_GET_STATUS)}, status, sizeof(status)))
-    return 0;
-  const uint32_t irq = (uint32_t(status[2]) << 24) | (uint32_t(status[3]) << 16) | (uint32_t(status[4]) << 8) |
-                       uint32_t(status[5]);
+size_t LR1121Radio::read_packet_(uint32_t irq, uint8_t *buf, size_t max_len) {
   size_t len = 0;
   if (irq & IRQ_RX_DONE) {
     uint8_t rx_status[3] = {};
@@ -253,15 +268,26 @@ bool LR1121Radio::transact(const Address &address, const RawPacket &packet, Pack
   while (!this->irq_pin_->digital_read() && millis() - start <= REPLY_TIMEOUT_MS)
     delayMicroseconds(10);
 
+  const uint32_t irq = this->read_irq_();
+  this->tx_count_++;
+  if (irq & IRQ_TX_DONE)
+    this->tx_done_count_++;
   uint8_t buf[SNIFF_LEN];
-  const size_t len = this->read_raw(buf, sizeof(buf));  // Also restarts sniffing
+  const size_t len = this->read_packet_(irq, buf, sizeof(buf));  // Also restarts sniffing
   if (len < PACKET_LEN) {
+    ESP_LOGD(TAG, "No reply from lamp (TX %s, IRQ 0x%08" PRIX32 ", %" PRIu32 "/%" PRIu32 " transmissions completed)",
+             (irq & IRQ_TX_DONE) ? "done" : "NOT done", irq, this->tx_done_count_, this->tx_count_);
     this->listen();
     return false;
   }
   Packet p = parse_packet(address, buf, len);
-  if (!p.crc_valid || p.pkt_len != PAYLOAD_LEN)
+  if (!p.crc_valid || p.pkt_len != PAYLOAD_LEN) {
+    char hex[SNIFF_LEN * 3];
+    to_hex(buf, len, hex, sizeof(hex));
+    ESP_LOGD(TAG, "Reply with bad CRC: %s", hex);
     return false;
+  }
+  this->reply_count_++;
   *reply = p;
   return true;
 }

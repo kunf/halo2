@@ -98,6 +98,9 @@ Payload build_payload(uint8_t command, const LampState &state, bool auto_mode = 
 /// Sanity checks on a received payload (validate_packet() in benq_halo/__init__.py).
 bool validate_payload(const Payload &payload);
 
+/// "AA BB CC" hex dump for logs; `out` should hold 3 * len bytes.
+void to_hex(const uint8_t *data, size_t len, char *out, size_t out_len);
+
 /// Lamp state carried by a payload (parse_lamp_status()).
 LampState parse_payload(const Payload &payload);
 

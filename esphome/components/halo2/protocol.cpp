@@ -166,6 +166,18 @@ bool validate_payload(const Payload &p) {
   return t1 >= COLOR_TEMP_MIN && t1 <= COLOR_TEMP_MAX && t2 >= COLOR_TEMP_MIN && t2 <= COLOR_TEMP_MAX;
 }
 
+void to_hex(const uint8_t *data, size_t len, char *out, size_t out_len) {
+  static const char DIGITS[] = "0123456789ABCDEF";
+  size_t pos = 0;
+  for (size_t i = 0; i < len && pos + 3 <= out_len; i++) {
+    out[pos++] = DIGITS[data[i] >> 4];
+    out[pos++] = DIGITS[data[i] & 0x0F];
+    out[pos++] = (i + 1 < len) ? ' ' : '\0';
+  }
+  if (out_len > 0)
+    out[pos < out_len ? pos : out_len - 1] = '\0';
+}
+
 LampState parse_payload(const Payload &p) {
   LampState s;
   const uint8_t control = p[1];

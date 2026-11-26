@@ -47,6 +47,9 @@ class LR1121Radio {
   const char *failure() const { return this->failure_; }
   /// LR1121 GetErrors flags read after calibration (0 = none).
   uint16_t errors() const { return this->errors_; }
+  uint32_t tx_count() const { return this->tx_count_; }
+  uint32_t tx_done_count() const { return this->tx_done_count_; }
+  uint32_t reply_count() const { return this->reply_count_; }
 
  protected:
   bool wait_busy_(uint32_t timeout_ms = 1000);  // Same as the MicroPython driver
@@ -54,6 +57,9 @@ class LR1121Radio {
   void write_cmd_(uint16_t opcode, const uint8_t *params, size_t len);
   bool read_cmd_(std::initializer_list<uint8_t> opcode_and_params, uint8_t *out, size_t len);
   void set_packet_length_(uint8_t len);
+  void write_sync_word_(const Address &sync_word);
+  uint32_t read_irq_();
+  size_t read_packet_(uint32_t irq, uint8_t *buf, size_t max_len);
   void restart_rx_();
 
   Halo2SPIDevice *spi_{nullptr};
@@ -64,6 +70,9 @@ class LR1121Radio {
   bool failed_{false};
   uint16_t last_cmd_{0};
   uint16_t errors_{0};
+  uint32_t tx_count_{0};
+  uint32_t tx_done_count_{0};
+  uint32_t reply_count_{0};
   char failure_[80]{};
   std::array<uint8_t, 4> version_{};
 };

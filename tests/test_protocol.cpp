@@ -133,6 +133,16 @@ static void test_payload_roundtrip() {
   CHECK(!validate_payload(p));
 }
 
+static void test_to_hex() {
+  const uint8_t data[] = {0x00, 0xAB, 0x7F};
+  char out[9];
+  to_hex(data, 3, out, sizeof(out));
+  CHECK(std::strcmp(out, "00 AB 7F") == 0);
+  char small[4];
+  to_hex(data, 3, small, sizeof(small));
+  CHECK(std::strlen(small) < sizeof(small));
+}
+
 int main() {
   test_compile_matches_micropython();
   test_corrupt_packet_rejected();
@@ -140,6 +150,7 @@ int main() {
   test_second_packet_any_alignment();
   test_extract_address();
   test_payload_roundtrip();
+  test_to_hex();
   if (failures) {
     std::printf("%d check(s) failed\n", failures);
     return 1;
