@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
@@ -76,6 +77,7 @@ bool LR1121Radio::wait_busy_(uint32_t timeout_ms) {
       return false;
     }
     delayMicroseconds(10);
+    App.feed_wdt();
   }
   return true;
 }
@@ -154,35 +156,7 @@ void LR1121Radio::set_packet_length_(uint8_t len) {
 
 bool LR1121Radio::init(const Address &sync_word) {
   this->sync_word_ = sync_word;
-  if (this->tcxo_voltage_code_ != TCXO_AUTO) {
-    if (!this->configure_(sync_word, this->tcxo_voltage_code_))
-      return false;
-    this->tx_check_ok_ = this->tx_check_();
-    return !this->failed_;
-  }
-  // Try TCXO voltages from 3.0 V (the MicroPython driver's value) down, then a plain
-  // crystal, and keep the first one whose oscillator survives a test transmission.
-  static const uint8_t CANDIDATES[] = {6, 5, 4, 3, 2, 1, 0, TCXO_NONE};
-  for (uint8_t code : CANDIDATES) {
-    if (!this->configure_(sync_word, code)) {
-      if (!this->chip_found_)
-        return false;
-      // The chip answered but got stuck with this clock setting: try the next one
-      ESP_LOGD(TAG, "Clock candidate %u: %s", code, this->failure_);
-      this->failed_ = false;
-      continue;
-    }
-    this->tx_check_ok_ = this->tx_check_();
-    ESP_LOGD(TAG, "Clock candidate %u: clock check 0x%04X, TX check %s (errors 0x%04X)", code,
-             this->clock_check_errors_, this->tx_check_ok_ ? "OK" : "FAILED", this->tx_check_errors_);
-    if (this->tx_check_ok_) {
-      this->auto_selected_ = true;
-      return true;
-    }
-  }
-  // Nothing worked: fall back to 3.0 V so RX keeps working as before
-  this->failed_ = false;
-  if (!this->configure_(sync_word, 6))
+  if (!this->configure_(sync_word, this->tcxo_voltage_code_))
     return false;
   this->tx_check_ok_ = this->tx_check_();
   return !this->failed_;
@@ -232,7 +206,8 @@ bool LR1121Radio::tx_check_() {
   this->write_cmd_({HI(CMD_CLEAR_ERRORS), LO(CMD_CLEAR_ERRORS)});
   this->write_cmd_({HI(CMD_CLEAR_IRQ), LO(CMD_CLEAR_IRQ), 0xFF, 0xFF, 0xFF, 0xFF});
   if (!ok) {
-    // The oscillator may be stopped now; start from scratch with the real address
+    // The oscillator may be stopped now: reset once and carry on with the real address
+    ESP_LOGW(TAG, "TX check failed (IRQ 0x%08" PRIX32 ", errors 0x%04X)", irq, this->tx_check_errors_);
     this->configure_(this->sync_word_, this->active_tcxo_code_);
     return false;
   }

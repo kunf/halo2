@@ -66,8 +66,7 @@ halo2:
   # address: [0x4e, 0xf5, 0x5d, 0x43]
   # poll_interval: 5s
   # Supply voltage of the module's 32 MHz TCXO (1.6V ... 3.3V, "none" for a crystal).
-  # "auto" (default) tests the settings at start-up and shows the one it picked in the log.
-  # tcxo_voltage: auto
+  # tcxo_voltage: 3.0V
 
 light:
   - platform: halo2

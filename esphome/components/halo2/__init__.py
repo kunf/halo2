@@ -20,7 +20,7 @@ CONF_TCXO_VOLTAGE = "tcxo_voltage"
 
 # SetTcxoMode voltage codes; "none" means the module has a plain crystal
 TCXO_VOLTAGES = {
-    "1.6V": 0, "1.7V": 1, "1.8V": 2, "2.2V": 3, "2.4V": 4, "2.7V": 5, "3.0V": 6, "3.3V": 7, "NONE": 0xFF, "AUTO": 0xFE,
+    "1.6V": 0, "1.7V": 1, "1.8V": 2, "2.2V": 3, "2.4V": 4, "2.7V": 5, "3.0V": 6, "3.3V": 7, "NONE": 0xFF,
 }
 
 halo2_ns = cg.esphome_ns.namespace("halo2")
@@ -55,7 +55,7 @@ CONFIG_SCHEMA = (
             cv.Optional(
                 CONF_POLL_INTERVAL, default="5s"
             ): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_TCXO_VOLTAGE, default="AUTO"): cv.one_of(
+            cv.Optional(CONF_TCXO_VOLTAGE, default="3.0V"): cv.one_of(
                 *TCXO_VOLTAGES, upper=True, space=""
             ),
         }

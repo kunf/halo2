@@ -66,13 +66,10 @@ void Halo2Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  LR1121 version: hw %02X, use case %02X, firmware %u.%02u", v[0], v[1], v[2], v[3]);
   static const char *const VOLTAGES[] = {"1.6", "1.7", "1.8", "2.2", "2.4", "2.7", "3.0", "3.3"};
   const uint8_t tcxo = this->radio_.active_tcxo_code();
-  const char *how = this->radio_.tcxo_voltage_code() == LR1121Radio::TCXO_AUTO
-                        ? (this->radio_.auto_selected() ? " (auto-selected)" : " (auto: no setting passed, using 3.0 V)")
-                        : " (from config)";
   if (tcxo <= 7) {
-    ESP_LOGCONFIG(TAG, "  Clock: TCXO %s V%s", VOLTAGES[tcxo], how);
+    ESP_LOGCONFIG(TAG, "  Clock: TCXO %s V", VOLTAGES[tcxo]);
   } else {
-    ESP_LOGCONFIG(TAG, "  Clock: crystal%s", how);
+    ESP_LOGCONFIG(TAG, "  Clock: crystal");
   }
   if (this->radio_.tx_check_ok()) {
     ESP_LOGCONFIG(TAG, "  TX check: OK");

@@ -25,15 +25,12 @@ class LR1121Radio {
   void set_reset_pin(GPIOPin *pin) { this->reset_pin_ = pin; }
   void set_busy_pin(GPIOPin *pin) { this->busy_pin_ = pin; }
   void set_irq_pin(GPIOPin *pin) { this->irq_pin_ = pin; }
-  static constexpr uint8_t TCXO_AUTO = 0xFE;
   static constexpr uint8_t TCXO_NONE = 0xFF;
-  /// SetTcxoMode voltage code (0: 1.6 V ... 6: 3.0 V, 7: 3.3 V), TCXO_NONE for a crystal,
-  /// or TCXO_AUTO to pick the first voltage whose oscillator survives a test transmission.
+  /// SetTcxoMode voltage code (0: 1.6 V ... 6: 3.0 V, 7: 3.3 V), or TCXO_NONE for a crystal.
   void set_tcxo_voltage_code(uint8_t code) { this->tcxo_voltage_code_ = code; }
   uint8_t tcxo_voltage_code() const { return this->tcxo_voltage_code_; }
-  /// Clock setting in use (resolved from TCXO_AUTO).
+  /// Clock setting in use.
   uint8_t active_tcxo_code() const { return this->active_tcxo_code_; }
-  bool auto_selected() const { return this->auto_selected_; }
   bool tx_check_ok() const { return this->tx_check_ok_; }
   uint16_t tx_check_errors() const { return this->tx_check_errors_; }
   uint32_t reinit_count() const { return this->reinit_count_; }
@@ -103,9 +100,8 @@ class LR1121Radio {
   uint16_t last_cmd_{0};
   uint16_t errors_{0};
   uint16_t clock_check_errors_{0};
-  uint8_t tcxo_voltage_code_{TCXO_AUTO};
+  uint8_t tcxo_voltage_code_{6};  // 3.0 V, as the MicroPython driver
   uint8_t active_tcxo_code_{6};
-  bool auto_selected_{false};
   bool chip_found_{false};
   bool tx_check_ok_{false};
   uint16_t tx_check_errors_{0};
