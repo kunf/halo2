@@ -43,9 +43,13 @@ class LR1121Radio {
   /// Firmware version bytes read during init (hardware, use case, major, minor).
   const std::array<uint8_t, 4> &version() const { return this->version_; }
   bool is_failed() const { return this->failed_; }
+  /// Why the radio failed, empty if it didn't.
+  const char *failure() const { return this->failure_; }
+  /// LR1121 GetErrors flags read after calibration (0 = none).
+  uint16_t errors() const { return this->errors_; }
 
  protected:
-  bool wait_busy_(uint32_t timeout_ms = 100);
+  bool wait_busy_(uint32_t timeout_ms = 1000);  // Same as the MicroPython driver
   void write_cmd_(std::initializer_list<uint8_t> opcode_and_params);
   void write_cmd_(uint16_t opcode, const uint8_t *params, size_t len);
   bool read_cmd_(std::initializer_list<uint8_t> opcode_and_params, uint8_t *out, size_t len);
@@ -58,6 +62,9 @@ class LR1121Radio {
   GPIOPin *irq_pin_{nullptr};
   uint8_t pkt_len_{0};
   bool failed_{false};
+  uint16_t last_cmd_{0};
+  uint16_t errors_{0};
+  char failure_[80]{};
   std::array<uint8_t, 4> version_{};
 };
 

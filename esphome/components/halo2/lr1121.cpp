@@ -4,6 +4,9 @@
 
 #include "esphome/core/log.h"
 
+#include <cinttypes>
+#include <cstdio>
+
 namespace esphome {
 namespace halo2 {
 
@@ -15,6 +18,7 @@ static constexpr uint16_t CMD_GET_VERSION = 0x0101;
 static constexpr uint16_t CMD_WRITE_BUFFER = 0x0109;
 static constexpr uint16_t CMD_READ_BUFFER = 0x010A;
 static constexpr uint16_t CMD_CLEAR_RX_BUFFER = 0x010B;
+static constexpr uint16_t CMD_GET_ERRORS = 0x010D;
 static constexpr uint16_t CMD_CLEAR_ERRORS = 0x010E;
 static constexpr uint16_t CMD_CALIBRATE = 0x010F;
 static constexpr uint16_t CMD_SET_REG_MODE = 0x0110;
@@ -53,8 +57,11 @@ bool LR1121Radio::wait_busy_(uint32_t timeout_ms) {
   const uint32_t start = millis();
   while (this->busy_pin_->digital_read()) {
     if (millis() - start > timeout_ms) {
-      if (!this->failed_)
-        ESP_LOGE(TAG, "BUSY timeout: transceiver not responding");
+      if (!this->failed_) {
+        snprintf(this->failure_, sizeof(this->failure_), "BUSY stayed high for %" PRIu32 " ms after command 0x%04X",
+                 timeout_ms, this->last_cmd_);
+        ESP_LOGE(TAG, "%s", this->failure_);
+      }
       this->failed_ = true;
       return false;
     }
@@ -70,6 +77,7 @@ void LR1121Radio::write_cmd_(std::initializer_list<uint8_t> data) {
   for (uint8_t b : data)
     this->spi_->write_byte(b);
   this->spi_->disable();
+  this->last_cmd_ = static_cast<uint16_t>((data.begin()[0] << 8) | data.begin()[1]);
   delayMicroseconds(50);
 }
 
@@ -81,6 +89,7 @@ void LR1121Radio::write_cmd_(uint16_t opcode, const uint8_t *params, size_t len)
   this->spi_->write_byte(LO(opcode));
   this->spi_->write_array(params, len);
   this->spi_->disable();
+  this->last_cmd_ = opcode;
   delayMicroseconds(50);
 }
 
@@ -91,6 +100,7 @@ bool LR1121Radio::read_cmd_(std::initializer_list<uint8_t> data, uint8_t *out, s
   for (uint8_t b : data)
     this->spi_->write_byte(b);
   this->spi_->disable();
+  this->last_cmd_ = static_cast<uint16_t>((data.begin()[0] << 8) | data.begin()[1]);
   if (!this->wait_busy_())
     return false;
   this->spi_->enable();
@@ -114,6 +124,8 @@ void LR1121Radio::set_packet_length_(uint8_t len) {
 
 bool LR1121Radio::init(const Address &sync_word) {
   this->failed_ = false;
+  this->failure_[0] = '\0';
+  this->last_cmd_ = 0;
   this->reset_pin_->setup();
   this->busy_pin_->setup();
   this->irq_pin_->setup();
@@ -135,8 +147,9 @@ bool LR1121Radio::init(const Address &sync_word) {
     all_ff &= (b == 0xFF);
   }
   if (all_zero || all_ff) {
-    ESP_LOGE(TAG, "LR1121 not found (version %02X %02X %02X %02X), check wiring", version_[0], version_[1],
-             version_[2], version_[3]);
+    snprintf(this->failure_, sizeof(this->failure_), "LR1121 not found (version %02X %02X %02X %02X), check wiring",
+             version_[0], version_[1], version_[2], version_[3]);
+    ESP_LOGE(TAG, "%s", this->failure_);
     this->failed_ = true;
     return false;
   }
@@ -149,6 +162,9 @@ bool LR1121Radio::init(const Address &sync_word) {
   this->write_cmd_({HI(CMD_CLEAR_ERRORS), LO(CMD_CLEAR_ERRORS)});
   this->write_cmd_({HI(CMD_CALIBRATE), LO(CMD_CALIBRATE)});
   delay(10);
+  uint8_t errors[3] = {};
+  if (this->read_cmd_({HI(CMD_GET_ERRORS), LO(CMD_GET_ERRORS)}, errors, sizeof(errors)))
+    this->errors_ = static_cast<uint16_t>((errors[1] << 8) | errors[2]);
 
   this->write_cmd_({HI(CMD_SET_PKT_TYPE), LO(CMD_SET_PKT_TYPE), 0x01});  // GFSK
   this->write_cmd_({HI(CMD_SET_RF_FREQUENCY), LO(CMD_SET_RF_FREQUENCY), BE32(RF_FREQUENCY_HZ)});

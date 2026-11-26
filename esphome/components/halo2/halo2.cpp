@@ -45,8 +45,8 @@ void Halo2Component::setup() {
   }
 
   if (!this->radio_.init(have_address ? initial : DISCOVERY_SYNC_WORD)) {
-    this->status_set_error(LOG_STR("LR1121 not responding, check wiring"));
-    this->set_status_("Radio error: LR1121 not found");
+    this->status_set_error(LOG_STR("LR1121 setup failed"));
+    this->set_status_("Radio error: LR1121 setup failed");
     this->mark_failed();
     return;
   }
@@ -64,7 +64,11 @@ void Halo2Component::dump_config() {
   ESP_LOGCONFIG(TAG, "BenQ ScreenBar HALO 2 (LR1121):");
   const auto &v = this->radio_.version();
   ESP_LOGCONFIG(TAG, "  LR1121 version: hw %02X, use case %02X, firmware %u.%02u", v[0], v[1], v[2], v[3]);
-  if (this->have_address_) {
+  if (this->radio_.errors() != 0)
+    ESP_LOGW(TAG, "  LR1121 errors after calibration: 0x%04X", this->radio_.errors());
+  if (this->radio_.is_failed()) {
+    // Nothing below applies
+  } else if (this->have_address_) {
     char buf[40];
     format_address(this->address_, buf, sizeof(buf));
     ESP_LOGCONFIG(TAG, "  Lamp address: %s (%s)", buf,
@@ -73,8 +77,8 @@ void Halo2Component::dump_config() {
     ESP_LOGCONFIG(TAG, "  Lamp address: not known yet, discovery running");
   }
   ESP_LOGCONFIG(TAG, "  Poll interval: %" PRIu32 " ms", this->poll_interval_);
-  if (this->is_failed())
-    ESP_LOGE(TAG, "  Setup failed: LR1121 not found");
+  if (this->radio_.is_failed())
+    ESP_LOGE(TAG, "  Radio failed: %s", this->radio_.failure());
 }
 
 void Halo2Component::loop() {
