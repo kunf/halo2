@@ -16,7 +16,8 @@ static const char *const TAG = "halo2";
 static constexpr uint8_t NO_COMMAND = 0xFF;
 static constexpr uint32_t SYNC_POLL_INTERVAL_MS = 500;  // Between polls while the lamp applies an update
 static constexpr uint8_t SYNC_MAX_POLLS = 5;
-static constexpr uint8_t COMMAND_ATTEMPTS = 3;          // Sends of a command without a reply            // Give up confirming an update after this
+static constexpr uint8_t COMMAND_ATTEMPTS = 3;
+static constexpr uint32_t RADIO_RETRY_MS = 10000;       // Re-initialize a radio that stopped answering          // Sends of a command without a reply            // Give up confirming an update after this
 static constexpr uint32_t UNREACHABLE_AFTER_MS = 30000;
 static constexpr uint32_t DISCOVERY_HINT_INTERVAL_MS = 15000;
 
@@ -45,20 +46,56 @@ void Halo2Component::setup() {
     }
   }
 
+  this->startup_address_ = initial;
+  this->startup_have_address_ = have_address;
   if (!this->radio_.init(have_address ? initial : DISCOVERY_SYNC_WORD)) {
-    this->status_set_error(LOG_STR("LR1121 setup failed"));
-    this->set_status_("Radio error: LR1121 setup failed");
-    this->mark_failed();
+    // Keep running and retry from loop(): the module may come back (power or wiring)
+    this->radio_down_();
     return;
   }
+  this->start_radio_();
+}
 
-  if (have_address) {
-    this->use_address_(initial);
+void Halo2Component::start_radio_() {
+  this->radio_started_ = true;
+  if (this->startup_have_address_) {
+    this->use_address_(this->startup_address_);
   } else {
     this->start_discovery_();
   }
-  // First poll a second after boot
+  // First poll a second after start
   this->last_poll_ = millis() - this->poll_interval_ + 1000;
+}
+
+void Halo2Component::radio_down_() {
+  this->status_set_error(LOG_STR("LR1121 not responding"));
+  this->set_status_("Radio error: LR1121 not responding");
+  this->radio_retry_at_ = millis() + RADIO_RETRY_MS;
+  ESP_LOGE(TAG, "LR1121 not responding (%s); retrying every %u s", this->radio_.failure(),
+           unsigned(RADIO_RETRY_MS / 1000));
+}
+
+void Halo2Component::retry_radio_() {
+  if (static_cast<int32_t>(millis() - this->radio_retry_at_) < 0)
+    return;
+  this->radio_retry_at_ = millis() + RADIO_RETRY_MS;
+  Address sync = this->startup_have_address_ ? this->startup_address_ : DISCOVERY_SYNC_WORD;
+  if (this->radio_started_)
+    sync = (this->mode_ == Mode::DISCOVERY || !this->have_address_) ? DISCOVERY_SYNC_WORD : this->address_;
+  if (!this->radio_.init(sync)) {
+    ESP_LOGW(TAG, "LR1121 still not responding (%s)", this->radio_.failure());
+    return;
+  }
+  ESP_LOGI(TAG, "LR1121 is responding again");
+  this->status_clear_error();
+  this->set_status_("OK");
+  if (!this->radio_started_) {
+    this->start_radio_();
+  } else {
+    this->pending_command_ = NO_COMMAND;
+    this->sync_polls_ = 0;
+    this->last_poll_ = millis() - this->poll_interval_;  // Poll right away
+  }
 }
 
 void Halo2Component::dump_config() {
@@ -116,11 +153,17 @@ void Halo2Component::dump_config() {
 
 void Halo2Component::loop() {
   if (this->radio_.is_failed()) {
-    this->status_set_error(LOG_STR("LR1121 stopped responding"));
-    this->set_status_("Radio error: LR1121 not responding");
-    this->mark_failed();
-    return;
+    if (!this->radio_was_down_) {
+      this->radio_was_down_ = true;
+      this->radio_down_();
+    }
+    this->retry_radio_();
+    if (this->radio_.is_failed())
+      return;
   }
+  this->radio_was_down_ = false;
+  if (!this->radio_started_)
+    return;
   if (this->mode_ == Mode::DISCOVERY) {
     this->loop_discovery_();
     return;
