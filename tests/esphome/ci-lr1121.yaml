@@ -1,0 +1,101 @@
+# CI build of esphome/halo2-lr1121.yaml against the local component, with dummy credentials.
+# Generated from the example; keep them in sync.
+
+# BenQ ScreenBar HALO 2 bridge: ESP32-WROOM DevKit + Waveshare Core1121-HF (LR1121).
+# Flash once over USB:   esphome run halo2-lr1121.yaml
+# Later updates go over Wi-Fi (OTA). Then add the device in Home Assistant:
+# Settings > Devices & services > ESPHome (usually discovered automatically).
+
+substitutions:
+  name: screenbar-halo2
+  friendly_name: ScreenBar HALO 2
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: ../../esphome/components
+    components: [halo2]
+
+logger:
+
+api:
+  encryption:
+    key: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="
+
+ota:
+  - platform: esphome
+    password: "ci-only"
+
+wifi:
+  ssid: "ci"
+  password: "ci-only-pass"
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: "ci-only-pass"
+
+captive_portal:
+
+# Optional: web UI at http://screenbar-halo2.local
+web_server:
+  port: 80
+  auth:
+    username: "ci"
+    password: "ci-only"
+
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+halo2:
+  cs_pin: GPIO5
+  reset_pin: GPIO16
+  busy_pin: GPIO17
+  irq_pin: GPIO4          # LR1121 DIO9
+  # The lamp's address. Leave it out to discover it: after flashing, set the back lamp
+  # to 10% and 3925 K with the remote. The discovered address is kept in flash.
+  # An address from the MicroPython version's halo2_address.py works as is:
+  # address: [0x4e, 0xf5, 0x5d, 0x43]
+  # poll_interval: 5s
+  # Supply voltage of the module's 32 MHz TCXO (1.6V ... 3.3V, "none" for a crystal).
+  # 1.8V works on the Waveshare Core1121; with 3.0V its oscillator stopped while transmitting.
+  # tcxo_voltage: 1.8V
+  # Transmit power in dBm (-18 ... 13). The lamp is usually close, so low power is enough.
+  # tx_power: 0
+
+light:
+  - platform: halo2
+    front:
+      name: "Front light"
+    back:
+      name: "Back light"
+
+switch:
+  - platform: halo2
+    power:
+      name: "Power"
+    ultrasonic:
+      name: "Ultrasonic sensor"
+
+button:
+  - platform: halo2
+    auto:
+      name: "Auto"
+    discover_address:
+      name: "Discover address"
+
+text_sensor:
+  - platform: halo2
+    status:
+      name: "Radio status"
+    address:
+      name: "Lamp address"

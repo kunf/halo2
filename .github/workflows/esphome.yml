@@ -1,0 +1,40 @@
+name: ESPHome component
+
+on:
+  push:
+    paths: ["esphome/**", "tests/**", "src/benq_halo/utils.py", ".github/workflows/esphome.yml"]
+  pull_request:
+    paths: ["esphome/**", "tests/**", "src/benq_halo/utils.py", ".github/workflows/esphome.yml"]
+
+jobs:
+  protocol-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test vectors are up to date with the MicroPython code
+        run: |
+          python3 tests/gen_vectors.py > /tmp/vectors.h
+          diff -u tests/vectors.h /tmp/vectors.h
+      - name: Protocol unit tests
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -Iesphome/components/halo2 \
+            tests/test_protocol.cpp esphome/components/halo2/protocol.cpp -o test_protocol
+          ./test_protocol
+
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('tests/esphome/*.yaml') }}
+      - run: pip install esphome
+      - name: Compile ESP32 firmware
+        run: esphome compile tests/esphome/ci-lr1121.yaml

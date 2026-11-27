@@ -28,6 +28,26 @@ as well as ideas from [hatank](https://github.com/rguillon/hatank) by Renaud Gui
 NB! The lamp changes values gradually, which takes time, and it is easy to confuse it by rapidly changing the state in HA.
 The On/Off switch powers off the both front- and back- lights and will try to prevent them from changing until the lamp is turned on again.
 
+## ESPHome version (beta, LR1121 + ESP32)
+
+There is also an [ESPHome](https://esphome.io) external component in [`esphome/`](esphome). It talks to the lamp the same way as the MicroPython version, but you get ESPHome's encrypted native Home Assistant API (no MQTT broker), OTA updates over Wi-Fi, a web UI and YAML configuration. Only the Semtech LR1121 (e.g. Waveshare Core1121-HF) on an ESP32 is supported so far. Nothing on the lamp or its remote is modified.
+
+1. Wire the LR1121 to the ESP32 as in the [LR1121 pinout](#pinout-semtech-lr1121-xf) below (ESP32-WROOM DevKit column).
+2. Copy [`esphome/halo2-lr1121.yaml`](esphome/halo2-lr1121.yaml) and [`esphome/secrets.example.yaml`](esphome/secrets.example.yaml) (as `secrets.yaml`) to your ESPHome config folder and fill in the secrets. Generate the API key with `openssl rand -base64 32`.
+3. Flash over USB once with `esphome run halo2-lr1121.yaml`. Later updates go over Wi-Fi.
+4. Lamp address: if you already have `halo2_address.py` from the MicroPython version, put its four bytes in `address:`. Otherwise leave `address:` out and, after flashing, set the back lamp to 10% and 3925 K on the remote. The address is found, stored in flash and shown in the *Lamp address* sensor. The *Discover address* button repeats this.
+5. Home Assistant discovers the device (Settings → Devices & services → ESPHome).
+
+Entities: *Front light* (brightness and colour temperature), *Back light* (brightness), *Power*, *Ultrasonic sensor*, *Auto*, *Discover address*, *Radio status* and *Lamp address*. As in the MicroPython version, the lamp's state is polled every 5 seconds, packets from the remote are sniffed, and every change is confirmed by polling until the lamp reports it.
+
+The protocol code is unit tested against the MicroPython implementation (`tests/`), and CI compiles the firmware.
+
+Hardware notes (tested with a Waveshare Core1121 on an ESP32-WROOM DevKit):
+- Use a **2.4 GHz** antenna on the **2.4G_ANT** connector. The 868/915 MHz antenna in the kit is for the LoRa connector.
+- The LR1121's 32 MHz TCXO runs at **1.8 V** (`tcxo_voltage`, the default). At 3.0 V the oscillator stopped while transmitting (`HF_XOSC_START_ERR`), after which every radio command failed.
+- The radio must keep the oscillator running between a transmission and the reply window. The MicroPython LR1121 driver uses `AutoTxRx` intermediary mode `0x01` (STDBY_RC), which switches the TCXO off after every packet and made transmissions fail here. The ESPHome component uses `0x03` (frequency synthesis).
+- The log shows the clock setting and a start-up transmit check (`TX check: OK`) in the config dump.
+
 ## Connection diagram for Holtek BM5602-60-1
 
 ![](img/connection_diagramm.png)
