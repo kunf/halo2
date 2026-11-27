@@ -369,7 +369,6 @@ void Halo2Component::process_updates_() {
       ESP_LOGD(TAG, "No reply to command (attempt %u/%u)", attempt, COMMAND_ATTEMPTS);
     }
     this->sync_polls_ = SYNC_MAX_POLLS;
-    this->have_sync_reply_ = false;
     this->last_sync_poll_ = now - SYNC_POLL_INTERVAL_MS;  // First confirmation poll on the next loop
     return;
   }
@@ -391,14 +390,12 @@ void Halo2Component::process_updates_() {
       this->last_poll_ = now;
       return;
     }
-    this->have_sync_reply_ = true;
-    this->last_sync_reply_ = reply;
   }
   if (this->sync_polls_ == 0) {
-    ESP_LOGD(TAG, "Lamp did not confirm the update");
+    // The lamp can take a few seconds to apply a change, so a reply showing the old state
+    // isn't final: keep showing the requested state and let the next regular poll decide.
+    ESP_LOGD(TAG, "Lamp has not confirmed the update yet; the next poll will show its state");
     this->last_poll_ = now;
-    if (this->have_sync_reply_)
-      this->apply_lamp_state_(parse_payload(this->last_sync_reply_), "poll");
   }
 }
 

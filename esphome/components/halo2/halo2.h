@@ -130,8 +130,6 @@ class Halo2Component : public Component, public Halo2SPIDevice {
   Payload sync_payload_{};
   uint8_t sync_polls_{0};
   uint32_t last_sync_poll_{0};
-  bool have_sync_reply_{false};
-  Payload last_sync_reply_{};
 
   const char *status_{nullptr};
 
