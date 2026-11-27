@@ -77,6 +77,8 @@ class LR1121Radio {
   bool read_cmd_(std::initializer_list<uint8_t> opcode_and_params, uint8_t *out, size_t len);
   void set_packet_length_(uint8_t len);
   bool configure_(const Address &sync_word, uint8_t tcxo_code);
+  bool rx_pending_();
+  bool rx_done_by_status_(uint32_t irq);
   bool tx_check_();
   void check_stat1_(uint8_t stat1);
   void begin_cmd_(const uint8_t *data, size_t len);
@@ -101,6 +103,8 @@ class LR1121Radio {
   bool tx_check_ok_{false};
   uint16_t tx_check_errors_{0};
   uint32_t reinit_count_{0};
+  uint32_t last_irq_poll_{0};
+  bool dio9_warned_{false};
   int8_t tx_power_{0};
   Address sync_word_{};
   uint32_t tx_count_{0};

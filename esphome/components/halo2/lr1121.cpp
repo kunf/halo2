@@ -324,10 +324,33 @@ void LR1121Radio::listen() {
   this->restart_rx_();
 }
 
+// RX_DONE is signalled on DIO9, but also check the IRQ status over SPI (rate limited) so a
+// broken DIO9 wire doesn't stop reception.
+bool LR1121Radio::rx_pending_() {
+  if (this->irq_pin_->digital_read())
+    return true;
+  const uint32_t now = millis();
+  if (now - this->last_irq_poll_ < 10)
+    return false;
+  this->last_irq_poll_ = now;
+  return this->rx_done_by_status_(this->read_irq_());
+}
+
+bool LR1121Radio::rx_done_by_status_(uint32_t irq) {
+  if (!(irq & IRQ_RX_DONE))
+    return false;
+  if (!this->dio9_warned_) {
+    this->dio9_warned_ = true;
+    ESP_LOGW(TAG, "A packet was received but DIO9 stayed low: check the DIO9 -> IRQ pin wire. "
+                  "Falling back to polling the radio over SPI.");
+  }
+  return true;
+}
+
 size_t LR1121Radio::read_raw(uint8_t *buf, size_t max_len) {
-  if (this->failed_ || !this->irq_pin_->digital_read())
+  if (this->failed_ || !this->rx_pending_())
     return 0;
-  return this->read_packet_(IRQ_RX_DONE, buf, max_len);  // DIO9 only signals RX_DONE
+  return this->read_packet_(IRQ_RX_DONE, buf, max_len);
 }
 
 size_t LR1121Radio::read_packet_(uint32_t irq, uint8_t *buf, size_t max_len) {
@@ -371,11 +394,20 @@ bool LR1121Radio::transact(const Address &address, const RawPacket &packet, Pack
   this->write_cmd_({HI(CMD_SET_TX), LO(CMD_SET_TX), 0x00, 0x00, 0x00});
 
   const uint32_t start = millis();
-  while (!this->irq_pin_->digital_read() && millis() - start <= REPLY_TIMEOUT_MS)
-    delayMicroseconds(10);
+  uint32_t last_poll = start;
+  while (!this->irq_pin_->digital_read() && millis() - start <= REPLY_TIMEOUT_MS) {
+    // Also poll the IRQ status in case DIO9 isn't connected
+    if (millis() - last_poll >= 1) {
+      last_poll = millis();
+      if (this->read_irq_() & IRQ_RX_DONE)
+        break;
+    }
+    delayMicroseconds(50);
+  }
 
-  const bool rx_done = this->irq_pin_->digital_read();
+  const bool dio9 = this->irq_pin_->digital_read();
   uint32_t irq = this->read_irq_();
+  const bool rx_done = dio9 || this->rx_done_by_status_(irq);
   this->tx_count_++;
   if (irq & IRQ_TX_DONE)
     this->tx_done_count_++;
